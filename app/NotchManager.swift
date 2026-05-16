@@ -48,6 +48,9 @@ final class NotchManager: ObservableObject {
     /// that returns the proposal (so the same id keeps the error until either
     /// the user retries successfully or the row vanishes).
     @Published private(set) var proposalErrors: [String: String] = [:]
+    /// Same pattern for Sleep-On-It draft review failures, keyed by draft.id
+    /// (the Notion page id of the frozenDrafts row).
+    @Published private(set) var draftErrors: [String: String] = [:]
 
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
@@ -87,8 +90,10 @@ final class NotchManager: ObservableObject {
         if s.lastError == nil { hasLoadedOnce = true }
         // Drop stale per-proposal errors for proposals that are no longer
         // in the summary (applied, archived, or otherwise gone).
-        let liveIds = Set(s.proposals.map { $0.proposalId })
-        proposalErrors = proposalErrors.filter { liveIds.contains($0.key) }
+        let liveProposalIds = Set(s.proposals.map { $0.proposalId })
+        proposalErrors = proposalErrors.filter { liveProposalIds.contains($0.key) }
+        let liveDraftIds = Set(s.drafts.map { $0.id })
+        draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
         let total = s.proposalCount + s.draftCount + (s.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state {
@@ -149,12 +154,31 @@ final class NotchManager: ObservableObject {
     }
 
     func reviewDraft(draftId: String, approve: Bool) async {
-        await runAction(.reviewDraft(draftId), success: .reviewed(draftId)) {
-            _ = try await self.notion.invokeTool("reviewDraft", input: [
+        let action = InflightAction.reviewDraft(draftId)
+        let success = SuccessPing.reviewed(draftId)
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+
+        do {
+            _ = try await notion.invokeTool("reviewDraft", input: [
                 "draftId": draftId,
                 "decision": approve ? "approve" : "reject",
             ])
+            draftErrors.removeValue(forKey: draftId)
+            lastActionError = nil
+            lastSuccess = success
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if self?.lastSuccess == success { self?.lastSuccess = nil }
+            }
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription
+                  ?? String(describing: error)
+            draftErrors[draftId] = msg
+            lastSuccess = nil
         }
+
+        await poller.refreshNow()
     }
 
     /// Approve and apply a single proposal in one click. Calls the Worker
