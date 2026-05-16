@@ -25,7 +25,7 @@ struct DraftRow: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Button(action: {
-                        Task { await manager.reviewDraft(draftId: draft.draftId, approve: true) }
+                        Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
                     }) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption)
@@ -35,7 +35,7 @@ struct DraftRow: View {
                     .help("Accept rewrite")
 
                     Button(action: {
-                        Task { await manager.reviewDraft(draftId: draft.draftId, approve: false) }
+                        Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption)

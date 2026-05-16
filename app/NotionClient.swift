@@ -73,7 +73,7 @@ final class NotionClient {
     func fetchReadyDrafts() async throws -> [FrozenDraft] {
         let pages = try await queryDatabase(ids.frozenDrafts, filter: [
             "property": "Status",
-            "select": ["equals": "ready"],
+            "select": ["equals": "frozen"],
         ])
         return pages.compactMap(FrozenDraft.init)
     }

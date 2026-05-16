@@ -44,7 +44,6 @@ struct Proposal: Identifiable {
 
 struct FrozenDraft: Identifiable {
     let id: String        // page id (the frozenDrafts row)
-    let draftId: String
     let title: String
     let sourcePageId: String
     let original: String
@@ -53,28 +52,25 @@ struct FrozenDraft: Identifiable {
 
     init?(_ page: NotionPage) {
         self.id = page.id
-        self.draftId = page.properties["Draft ID"]?.plainText ?? ""
         self.title = page.properties["Title"]?.plainText ?? "Untitled"
         self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
-        self.original = page.properties["Original"]?.plainText ?? ""
+        self.original = page.properties["Original Snapshot"]?.plainText ?? ""
         self.rewrite = page.properties["Rewrite"]?.plainText ?? ""
-        self.frozenAt = page.properties["Frozen At"]?.plainText ?? ""
+        self.frozenAt = page.properties["Frozen At"]?.date?.start ?? ""
     }
 }
 
 struct WeeklyDigest {
     let weekStart: Date
     let url: URL?
-    let stats: String
 
     init?(_ page: NotionPage) {
-        let weekStartStr = page.properties["Week Start"]?.plainText ?? ""
+        let weekStartStr = page.properties["Week Start"]?.date?.start ?? ""
         let f = ISO8601DateFormatter()
         guard let ws = f.date(from: weekStartStr) ?? Self.tryParse(weekStartStr) else { return nil }
         self.weekStart = ws
-        let pageId = page.properties["Digest Page ID"]?.plainText ?? ""
+        let pageId = page.properties["Summary Page ID"]?.plainText ?? ""
         self.url = URL(string: "notion://www.notion.so/\(pageId.replacingOccurrences(of: "-", with: ""))")
-        self.stats = page.properties["Stats"]?.plainText ?? ""
     }
 
     private static func tryParse(_ s: String) -> Date? {
