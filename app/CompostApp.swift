@@ -23,16 +23,30 @@ struct CompostApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchManager: NotchManager?
+    private var setupWindow: NSWindow?  // retained so the manual setup window survives the launch cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let token = Keychain.get(.notionToken),
-              let parentId = Keychain.get(.parentPageId),
-              let compostDbId = Keychain.get(.compostPileDbId),
-              let frozenDbId = Keychain.get(.frozenDraftsDbId)
-        else {
+        // NSLog so the path the launch took shows up in `log stream`.
+        let token       = Keychain.get(.notionToken)
+        let parentId    = Keychain.get(.parentPageId)
+        let compostDbId = Keychain.get(.compostPileDbId)
+        let frozenDbId  = Keychain.get(.frozenDraftsDbId)
+        let weeklyDbId  = Keychain.get(.weeklyDigestsDbId)
+        let cueDbId     = Keychain.get(.cueCardsDbId)
+        NSLog("[Compost] keychain state — token:%@ parent:%@ compost:%@ frozen:%@ weekly:%@ cue:%@",
+              token        == nil ? "MISSING" : "ok",
+              parentId     == nil ? "MISSING" : "ok",
+              compostDbId  == nil ? "MISSING" : "ok",
+              frozenDbId   == nil ? "MISSING" : "ok",
+              weeklyDbId   == nil ? "MISSING" : "ok",
+              cueDbId      == nil ? "MISSING" : "ok")
+
+        guard let token, let parentId, let compostDbId, let frozenDbId else {
+            NSLog("[Compost] required keychain fields missing — opening SetupView")
             openSetupWindow()
             return
         }
+        NSLog("[Compost] credentials ok — starting NotchManager and polling Notion")
 
         let client = NotionClient(
             token: token,
@@ -50,9 +64,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openSetupWindow() {
-        // For S1 the user can paste creds via SettingsView (cmd+,).
-        // For later: open setup explicitly here.
-        NSApp.activate(ignoringOtherApps: true)
+        // LSUIElement apps have no Dock icon and no menu bar; sendAction(
+        // showSettingsWindow:) was getting filtered out, so build the window
+        // ourselves and retain it. Dispatch async so AppKit has finished
+        // app-launch bookkeeping before we flip the activation policy.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+
+            let host = NSHostingController(rootView: SetupView())
+            let window = NSWindow(contentViewController: host)
+            window.title = "Compost — first run setup"
+            window.styleMask = [.titled, .closable, .resizable]
+            window.setContentSize(NSSize(width: 480, height: 420))
+            window.center()
+            window.isReleasedWhenClosed = false  // we keep the strong reference
+            window.makeKeyAndOrderFront(nil)
+            self.setupWindow = window
+            NSLog("[Compost] setup window made key+ordered front")
+        }
     }
 }
 

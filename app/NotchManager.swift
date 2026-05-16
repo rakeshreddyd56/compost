@@ -47,6 +47,7 @@ final class NotchManager: ObservableObject {
     private let poller: CompostPoller
     private let wake: WakeTrigger
     private let hotkey: HotkeyManager
+    private var hasAutoGreetedFirstLoad = false
 
     init(notion: NotionClient) {
         self.notion = notion
@@ -79,9 +80,31 @@ final class NotchManager: ObservableObject {
         if s.lastError == nil { hasLoadedOnce = true }
         let total = s.proposalCount + s.draftCount + (s.digestReady ? 1 : 0)
         if total == 0 {
-            if case .peek = state { transition(to: .hidden) }
-        } else if state == .hidden || state == .retracting {
+            if case .peek = state {
+                await notch?.hide()
+                transition(to: .hidden)
+            }
+            return
+        }
+
+        let shouldAutoGreet = !hasAutoGreetedFirstLoad
+        hasAutoGreetedFirstLoad = true
+
+        switch state {
+        case .hidden, .retracting:
             transition(to: .peek(badge: total))
+            await notch?.compact()
+        case .peek:
+            transition(to: .peek(badge: total))
+            await notch?.compact()
+        case .expanding, .expanded:
+            break
+        }
+
+        if shouldAutoGreet {
+            Task { @MainActor [weak self] in
+                await self?.greet()
+            }
         }
     }
 
@@ -175,8 +198,14 @@ final class NotchManager: ObservableObject {
 
     private func retract() async {
         transition(to: .retracting)
-        await notch?.hide()
-        transition(to: .hidden)
+        let total = summary.proposalCount + summary.draftCount + (summary.digestReady ? 1 : 0)
+        if total > 0 {
+            transition(to: .peek(badge: total))
+            await notch?.compact()
+        } else {
+            await notch?.hide()
+            transition(to: .hidden)
+        }
     }
 
     private func transition(to s: NotchState) { state = s }
@@ -206,6 +235,12 @@ struct ContentRouter: View {
                 }(),
                 offline: manager.summary.lastError != nil
             )
+            .contentShape(Capsule())
+            .onTapGesture {
+                Task { await manager.toggle() }
+            }
+            .help("Open Compost")
+            .accessibilityAddTraits(.isButton)
         case .expanding, .expanded:
             ExpandedView(manager: manager)
         }
