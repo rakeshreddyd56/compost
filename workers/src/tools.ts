@@ -4,6 +4,7 @@
 
 import { j } from "@notionhq/workers/schema-builder";
 import { applyApproved } from "./gardener";
+import { notionClient } from "./utils/notion-auth";
 
 export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts: any }) {
 
@@ -16,7 +17,7 @@ export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts
       errors: j.number(),
     }),
     execute: async (_input: any, context: any) => {
-      const changes = await applyApproved(context.notion);
+      const changes = await applyApproved(notionClient(context));
       const applied = changes.filter((c: any) => c?.properties?.Applied).length;
       const errors  = changes.filter((c: any) => c?.properties?.Error).length;
       return { applied, errors };
