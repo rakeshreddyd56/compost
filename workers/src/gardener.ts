@@ -13,6 +13,7 @@
 import * as Builder from "@notionhq/workers/builder";
 import { pace, sleep, withRetryOn429 } from "./utils/rate-limit";
 import { sha1, proposalId } from "./utils/hashing";
+import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 import {
   ageScore, orphanScore, stubScore, taglessScore, brokenLinkScore,
   decay, describeReason, pickAction, DECAY_THRESHOLD, type Signals,
@@ -27,6 +28,7 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
     mode: "incremental",
     schedule: "1d",
     execute: async (state: any, context: any) => {
+      if (!notionTokenReady()) { warnMissingToken("gardener"); return emptySync(); }
       // --- Phase 1: Walk ---
       const pages = await walkWorkspace(context.notion);
 

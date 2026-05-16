@@ -13,6 +13,7 @@
 import * as Builder from "@notionhq/workers/builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
+import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 
 interface Moment {
   startISO: string;
@@ -31,6 +32,7 @@ export function registerCue(worker: any, dbs: { cueCards: any; pacer: any }) {
     mode: "incremental",
     schedule: "5m",
     execute: async (state: any, context: any) => {
+      if (!notionTokenReady()) { warnMissingToken("cue"); return emptySync(); }
       const sources = await findCueSources(context.notion);
       const changes: any[] = [];
       for (const page of sources) {
