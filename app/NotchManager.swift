@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import DynamicNotchKit
 import AppKit
 import Combine
 
@@ -43,10 +42,14 @@ final class NotchManager: ObservableObject {
         }
 
         await poller.start { [weak self] s in
-            await self?.applySummary(s)
+            Task { await self?.applySummary(s) }
         }
-        wake.onWake = { [weak self] in await self?.greet() }
-        hotkey.onPressed = { [weak self] in await self?.toggle() }
+        wake.onWake = { [weak self] in
+            Task { await self?.greet() }
+        }
+        hotkey.onPressed = { [weak self] in
+            Task { await self?.toggle() }
+        }
     }
 
     // MARK: - State transitions

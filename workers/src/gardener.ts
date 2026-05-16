@@ -158,17 +158,26 @@ export async function applyApproved(notion: any): Promise<any[]> {
   const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
   if (!COMPOST_PILE_DATA_SOURCE_ID) return [];
 
-  const res: any = await withRetryOn429(() =>
-    notion.dataSources.query({
-      data_source_id: COMPOST_PILE_DATA_SOURCE_ID,
-      filter: {
-        and: [
-          { property: "Approved", checkbox: { equals: true } },
-          { property: "Applied",  checkbox: { equals: false } },
-        ],
-      },
-    })
-  );
+  let res: any;
+  try {
+    res = await withRetryOn429(() =>
+      notion.dataSources.query({
+        data_source_id: COMPOST_PILE_DATA_SOURCE_ID,
+        filter: {
+          and: [
+            { property: "Approved", checkbox: { equals: true } },
+            { property: "Applied",  checkbox: { equals: false } },
+          ],
+        },
+      })
+    );
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) {
+      console.warn("applyApproved skipped: Compost Pile data source is not shared with the integration");
+      return [];
+    }
+    throw e;
+  }
 
   const changes: any[] = [];
   for (const row of res.results) {
@@ -190,6 +199,10 @@ export async function applyApproved(notion: any): Promise<any[]> {
     await pace();
   }
   return changes;
+}
+
+function isNotionObjectNotFound(e: any): boolean {
+  return e?.code === "object_not_found" || /Could not find database|not shared with your integration/i.test(String(e?.message ?? e));
 }
 
 async function executeAction(notion: any, row: any) {
