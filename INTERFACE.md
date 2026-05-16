@@ -22,12 +22,14 @@
 | Property | Type | Notes |
 |---|---|---|
 | `Title` | title | Original page title |
+| `Draft ID` | rich_text | Stable sha1(page + date) id for idempotency |
 | `Source Page ID` | rich_text | Notion page that was edited late |
 | `Original Snapshot` | rich_text | Markdown of original content |
 | `Rewrite` | rich_text | Markdown of calmer rewrite |
-| `Status` | select | `frozen` \| `approved` \| `rejected` \| `expired` |
+| `Status` | select | `pending` \| `frozen` \| `ready` \| `approved` \| `rejected` \| `error` \| `expired` |
 | `Frozen At` | date | When edit happened |
 | `Reviewed At` | date | When user decided |
+| `Error` | rich_text | Last processing/review error, if any |
 
 ### `weeklyDigests` — Weekly archive (STRETCH)
 | Property | Type | Notes |
@@ -57,20 +59,20 @@
 
 ### `tidyNow`
 ```typescript
-input:  { scope?: string }  // optional database id; default = all
-output: { proposalsCreated: number, dashboardUrl: string }
+input:  {}
+output: { applied: number, errors: number }
 ```
 
 ### `applyApproved`
 ```typescript
 input:  {}
-output: { applied: number, errors: string[] }
+output: { applied: number, errors: number }
 ```
 
 ### `reviewDraft`
 ```typescript
-input:  { draftId: string, decision: "approve" | "reject" }
-output: { ok: boolean }
+input:  { draftId: string, decision: "approve" | "reject" } // accepts row page id or Draft ID
+output: { ok: boolean, error: string | null }
 ```
 
 ## Worker webhooks
@@ -78,7 +80,7 @@ output: { ok: boolean }
 ### `onLateNightEdit`
 - URL: published via `ntn workers webhooks list`, format: `https://www.notion.so/webhooks/worker/{spaceId}/{workerId}/{uniqueWebhookId}/onLateNightEdit`
 - Triggered by: **Notion's native webhook subscription** on `page.content_updated` event (registered in UI at `developers.notion.com` → Connection settings → Webhooks tab)
-- First POST contains `verification_token` — Worker echoes back to complete handshake; token stored as `NOTION_WEBHOOK_SECRET` env var
+- First POST contains `verification_token` — Worker echoes back to complete handshake; token stored as `COMPOST_WEBHOOK_SECRET` env var
 - Subsequent POSTs include `X-Notion-Signature: sha256=<hmac>` — verify HMAC-SHA256(rawBody, secret) with `crypto.timingSafeEqual`
 - Body: standard Notion webhook payload (page ID, event type, timestamp)
 
@@ -86,11 +88,12 @@ output: { ok: boolean }
 
 | Name | Where set | Used by |
 |---|---|---|
+| `COMPOST_NOTION_TOKEN` | Workers env | workers (Notion API client for syncs/webhooks) |
 | `OPENAI_API_KEY` | Workers env (`ntn workers env set`) | workers (embeddings) |
 | `ANTHROPIC_API_KEY` | Workers env | workers (LLM rewrites) |
-| `NOTION_PARENT_PAGE_ID` | Workers env | workers (where Compost Dashboard lives) |
+| `COMPOST_PARENT_PAGE_ID` | Workers env | workers (where Compost Dashboard lives) |
 | `USER_TIMEZONE` | Workers env | workers (Sleep-On-It gate) |
-| `NOTION_WEBHOOK_SECRET` | Workers env (set after first verification POST) | workers (Sleep-On-It HMAC verify) |
+| `COMPOST_WEBHOOK_SECRET` | Workers env (set after first verification POST) | workers (Sleep-On-It HMAC verify) |
 | `NOTION_INTEGRATION_TOKEN` | App keychain (v1 internal integration shortcut) | app (Notion API) |
 
 ## App ↔ Workers communication

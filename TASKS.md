@@ -92,6 +92,6 @@
 
 **Verify environment first:**
 - `ntn doctor` — should be 5/5 once Workers enabled
-- `cat .env` — every key filled in (NOTION_API_TOKEN, ANTHROPIC, OPENAI, MINIMAX, USER_TIMEZONE, NOTION_PARENT_PAGE_ID)
+- `cat .env` — every key filled in (COMPOST_NOTION_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY, USER_TIMEZONE, COMPOST_PARENT_PAGE_ID)
 - `ntn workers env push` — pushes .env to deployed worker
 - `ntn workers exec ping --remote -d '{}'` — sanity (should return ts)

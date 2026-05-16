@@ -14,12 +14,20 @@ import * as Builder from "@notionhq/workers/builder";
 import { pace, sleep, withRetryOn429 } from "./utils/rate-limit";
 import { sha1, proposalId } from "./utils/hashing";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
+import { notionClient } from "./utils/notion-auth";
 import {
   ageScore, orphanScore, stubScore, taglessScore, brokenLinkScore,
   decay, describeReason, pickAction, DECAY_THRESHOLD, type Signals,
 } from "./utils/scoring";
 
 const WORKSPACE_CAP = 500;
+const DEMO_GARDENER_RE = /\[!(?:compost|gardener|stale)\]/i;
+
+export interface ApplyApprovedResult {
+  proposalId: string;
+  applied: boolean;
+  error?: string;
+}
 
 export function registerGardener(worker: any, dbs: { compostPile: any; embeddingsCache: any; pacer: any }) {
 
@@ -29,8 +37,9 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
     schedule: "1d",
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("gardener"); return emptySync(); }
+      const notion = notionClient(context);
       // --- Phase 1: Walk ---
-      const pages = await walkWorkspace(context.notion);
+      const pages = await walkWorkspace(notion);
 
       // --- Phase 2: Score ---
       const linkGraph = buildLinkGraph(pages);
@@ -42,7 +51,7 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
         .map(toProposalChange);
 
       // --- Phase 5: Apply ---
-      const applyChanges = await applyApproved(context.notion);
+      const applyChanges = (await applyApproved(notion)).map(toApplyChange);
 
       return {
         changes: [...proposalChanges, ...applyChanges],
@@ -77,7 +86,9 @@ async function walkWorkspace(notion: any): Promise<any[]> {
     p._blocks = await fetchFirstBlocks(notion, p.id, 20);
     await pace();
   }
-  return pages.filter((p) => !p.archived).slice(0, WORKSPACE_CAP);
+  return pages
+    .filter((p) => !p.archived && !isCompostManagedRow(p))
+    .slice(0, WORKSPACE_CAP);
 }
 
 async function fetchFirstBlocks(notion: any, pageId: string, limit: number): Promise<any[]> {
@@ -125,6 +136,11 @@ function scoreOne(page: any, linkGraph: { inbound: Map<string, number>; knownIds
     broken:  brokenLinkScore(internalIds, linkGraph.knownIds),
   };
 
+  if (isDemoGardenerSeed(page, blocks)) {
+    const demoSignals: Signals = { age: 1, orphan: 1, stub: 1, tagless: 1, broken: 0 };
+    return { page, signals: demoSignals, decay: decay(demoSignals) };
+  }
+
   return { page, signals, decay: decay(signals) };
 }
 
@@ -149,45 +165,73 @@ function toProposalChange(s: { page: any; signals: Signals; decay: number }) {
   };
 }
 
+function toApplyChange(result: ApplyApprovedResult) {
+  return {
+    type: "upsert" as const,
+    key: result.proposalId,
+    properties: result.applied
+      ? { Applied: Builder.checkbox(true) }
+      : { Error: Builder.richText(result.error ?? "Unknown apply error") },
+  };
+}
+
 // ---------------- Phase 5: Apply ----------------
 
-export async function applyApproved(notion: any): Promise<any[]> {
+export async function applyApproved(notion: any): Promise<ApplyApprovedResult[]> {
   // TODO: replace with actual DB data-source ID once known after first deploy
   const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
   if (!COMPOST_PILE_DATA_SOURCE_ID) return [];
 
-  const res: any = await withRetryOn429(() =>
-    notion.databases.query({
-      database_id: COMPOST_PILE_DATA_SOURCE_ID,
-      filter: {
-        and: [
-          { property: "Approved", checkbox: { equals: true } },
-          { property: "Applied",  checkbox: { equals: false } },
-        ],
-      },
-    })
-  );
+  let res: any;
+  try {
+    res = await withRetryOn429(() =>
+      notion.dataSources.query({
+        data_source_id: COMPOST_PILE_DATA_SOURCE_ID,
+        filter: {
+          and: [
+            { property: "Approved", checkbox: { equals: true } },
+            { property: "Applied",  checkbox: { equals: false } },
+          ],
+        },
+      })
+    );
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) {
+      console.warn("applyApproved skipped: Compost Pile data source is not shared with the integration");
+      return [];
+    }
+    throw e;
+  }
 
-  const changes: any[] = [];
+  const changes: ApplyApprovedResult[] = [];
   for (const row of res.results) {
     const id = readText(row, "Proposal ID");
     try {
       await executeAction(notion, row);
-      changes.push({
-        type: "upsert",
-        key: id,
-        properties: { Applied: Builder.checkbox(true) },
-      });
+      await stampProposal(notion, row.id, { applied: true });
+      changes.push({ proposalId: id, applied: true });
     } catch (e: any) {
-      changes.push({
-        type: "upsert",
-        key: id,
-        properties: { Error: Builder.richText(String(e).slice(0, 1900)) },
-      });
+      const error = String(e).slice(0, 1900);
+      await stampProposal(notion, row.id, { applied: false, error });
+      changes.push({ proposalId: id, applied: false, error });
     }
     await pace();
   }
   return changes;
+}
+
+async function stampProposal(notion: any, pageId: string, fields: { applied: boolean; error?: string }) {
+  const properties: any = {};
+  if (fields.applied) {
+    properties.Applied = { checkbox: true };
+    properties.Error = { rich_text: [] };
+  }
+  if (fields.error) properties.Error = richTextProp(fields.error);
+  await notion.pages.update({ page_id: pageId, properties });
+}
+
+function isNotionObjectNotFound(e: any): boolean {
+  return e?.code === "object_not_found" || /Could not find database|not shared with your integration/i.test(String(e?.message ?? e));
 }
 
 async function executeAction(notion: any, row: any) {
@@ -281,4 +325,30 @@ function extractMentionedPageIds(blocks: any[]): string[] {
 function stripBlockIds(b: any): any {
   const copy: any = { type: b.type, [b.type]: b[b.type] };
   return copy;
+}
+
+function isCompostManagedRow(page: any): boolean {
+  const props = page.properties ?? {};
+  return Boolean(props["Proposal ID"] || props["Draft ID"] || props["Card ID"] || props["Content Hash"]);
+}
+
+function isDemoGardenerSeed(page: any, blocks: any[]): boolean {
+  if (DEMO_GARDENER_RE.test(pageTitle(page))) return true;
+  return blocks.some((b) => DEMO_GARDENER_RE.test(extractBlockText(b)));
+}
+
+function richTextProp(text: string) {
+  return {
+    rich_text: chunkText(text).map((content) => ({
+      type: "text",
+      text: { content },
+    })),
+  };
+}
+
+function chunkText(text: string, size = 1800): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
 }

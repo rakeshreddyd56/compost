@@ -60,6 +60,7 @@ export const frozenDrafts = worker.database("frozenDrafts", {
       Title:            Schema.title(),
       "Draft ID":       Schema.richText(),
       "Source Page ID": Schema.richText(),
+      "Original Snapshot": Schema.richText(),
       "Original":       Schema.richText(),
       "Rewrite":        Schema.richText(),
       "Status":         Schema.select([

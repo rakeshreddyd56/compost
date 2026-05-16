@@ -12,6 +12,7 @@ import * as Builder from "@notionhq/workers/builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 import { isSunday, startOfWeekSunday } from "./utils/time";
+import { notionClient } from "./utils/notion-auth";
 
 const WORKSPACE_CAP = 500;
 const SUBSTANTIVE_TOKEN_DELTA = 40;
@@ -25,14 +26,15 @@ export function registerWeekly(worker: any, dbs: { weeklySnapshots: any; weeklyD
     execute: async (state: any, context: any) => {
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
       if (!isSunday(tz)) return { changes: [], hasMore: false };
+      const notion = notionClient(context);
 
       const weekStart = startOfWeekSunday(tz);
-      const thisWeek = await captureWorkspaceState(context.notion);
-      const lastWeek = await loadSnapshots(context.notion);
+      const thisWeek = await captureWorkspaceState(notion);
+      const lastWeek = await loadSnapshots(notion);
       const cats = categorize(thisWeek, lastWeek);
       const summaries = await summarizeChanges(cats.substantively_edited);
-      const digest = await composeDigestPage(context.notion, { cats, summaries, weekStart });
-      await upsertSnapshots(context.notion, thisWeek, weekStart);
+      const digest = await composeDigestPage(notion, { cats, summaries, weekStart });
+      await upsertSnapshots(notion, thisWeek, weekStart);
 
       return {
         changes: [{
@@ -40,7 +42,7 @@ export function registerWeekly(worker: any, dbs: { weeklySnapshots: any; weeklyD
           key: weekStart.toISOString(),
           properties: {
             Title:             Builder.title(`Week of ${weekStart.toISOString().slice(0, 10)}`),
-            "Week Start":      Builder.date(weekStart.toISOString()),
+            "Week Start":      Builder.date(weekStart.toISOString().slice(0, 10)),
             "Digest Page ID":  Builder.richText(digest.id),
             "Stats":           Builder.richText(JSON.stringify(digest.stats)),
           },
@@ -102,8 +104,8 @@ async function loadSnapshots(notion: any): Promise<Map<string, PageState>> {
 
   let cursor: string | undefined = undefined;
   while (true) {
-    const res: any = await withRetryOn429(() => notion.databases.query({
-      database_id: SNAPSHOTS_DS,
+    const res: any = await withRetryOn429(() => notion.dataSources.query({
+      data_source_id: SNAPSHOTS_DS,
       page_size: 100,
       start_cursor: cursor,
     }));
@@ -234,8 +236,8 @@ async function composeDigestPage(
     para(`${stats.touched} pages had minor edits this week. Probably formatting or whitespace; not surfaced individually.`),
   ];
 
-  const parent = process.env.NOTION_PARENT_PAGE_ID;
-  if (!parent) throw new Error("NOTION_PARENT_PAGE_ID env var not set");
+  const parent = process.env.COMPOST_PARENT_PAGE_ID || process.env.NOTION_PARENT_PAGE_ID;
+  if (!parent) throw new Error("COMPOST_PARENT_PAGE_ID env var not set");
 
   const page = await notion.pages.create({
     parent: { page_id: parent },
