@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 compostPile: compostDbId,
                 frozenDrafts: frozenDbId,
                 weeklyDigests: Keychain.get(.weeklyDigestsDbId) ?? "",
+                cueCards: Keychain.get(.cueCardsDbId) ?? "",
                 parentPage: parentId
             )
         )
@@ -56,22 +57,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct SetupView: View {
-    @State private var token: String = ""
-    @State private var parentId: String = ""
-    @State private var compostDbId: String = ""
-    @State private var frozenDbId: String = ""
-    @State private var weeklyDigestsDbId: String = ""
+    @State private var token: String = Keychain.get(.notionToken) ?? ""
+    @State private var parentId: String = Keychain.get(.parentPageId) ?? ""
+    @State private var compostDbId: String = Keychain.get(.compostPileDbId) ?? ""
+    @State private var frozenDbId: String = Keychain.get(.frozenDraftsDbId) ?? ""
+    @State private var weeklyDigestsDbId: String = Keychain.get(.weeklyDigestsDbId) ?? ""
+    @State private var cueCardsDbId: String = Keychain.get(.cueCardsDbId) ?? ""
+    @State private var trusted: Bool = HotkeyManager.isTrusted
 
     var body: some View {
         Form {
             Section("Notion integration") {
                 SecureField("Integration token (secret_…)", text: $token)
+                    .accessibilityLabel("Notion integration token")
                 TextField("Parent page ID", text: $parentId)
+                    .accessibilityLabel("Notion parent page ID")
             }
             Section("Database IDs (from INTERFACE.md)") {
                 TextField("compostPile DB ID", text: $compostDbId)
                 TextField("frozenDrafts DB ID", text: $frozenDbId)
-                TextField("weeklyDigests DB ID", text: $weeklyDigestsDbId)
+                TextField("weeklyDigests DB ID (optional)", text: $weeklyDigestsDbId)
+                TextField("cueCards DB ID (optional)", text: $cueCardsDbId)
+            }
+            Section("Global hotkey ⌘⇧C") {
+                HStack {
+                    Image(systemName: trusted ? "checkmark.circle.fill" : "exclamationmark.circle")
+                        .foregroundColor(trusted ? .green : .orange)
+                    Text(trusted
+                        ? "Accessibility granted — hotkey active."
+                        : "Compost needs Accessibility to register ⌘⇧C globally.")
+                        .font(.callout)
+                }
+                if !trusted {
+                    Button("Open System Settings") {
+                        HotkeyManager.requestAccessibility()
+                    }
+                }
             }
             Button("Save and start") {
                 Keychain.set(.notionToken, token)
@@ -79,11 +100,13 @@ struct SetupView: View {
                 Keychain.set(.compostPileDbId, compostDbId)
                 Keychain.set(.frozenDraftsDbId, frozenDbId)
                 Keychain.set(.weeklyDigestsDbId, weeklyDigestsDbId)
-                // Relaunch so AppDelegate picks up
+                Keychain.set(.cueCardsDbId, cueCardsDbId)
                 NSApp.terminate(nil)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(token.isEmpty || compostDbId.isEmpty || frozenDbId.isEmpty)
         }
         .padding()
+        .onAppear { trusted = HotkeyManager.isTrusted }
     }
 }

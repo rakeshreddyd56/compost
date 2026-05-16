@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import DynamicNotchKit
 import AppKit
 import Combine
 
@@ -43,10 +42,14 @@ final class NotchManager: ObservableObject {
         }
 
         await poller.start { [weak self] s in
-            await self?.applySummary(s)
+            Task { await self?.applySummary(s) }
         }
-        wake.onWake = { [weak self] in await self?.greet() }
-        hotkey.onPressed = { [weak self] in await self?.toggle() }
+        wake.onWake = { [weak self] in
+            Task { await self?.greet() }
+        }
+        hotkey.onPressed = { [weak self] in
+            Task { await self?.toggle() }
+        }
     }
 
     // MARK: - State transitions
@@ -80,6 +83,11 @@ final class NotchManager: ObservableObject {
 
     func tidyNow() async {
         _ = try? await notion.invokeTool("tidyNow", input: [:])
+        await poller.forceRefresh()
+    }
+
+    func applyApproved() async {
+        _ = try? await notion.invokeTool("applyApproved", input: [:])
         await poller.forceRefresh()
     }
 
@@ -120,7 +128,16 @@ struct ContentRouter: View {
         case .hidden, .retracting:
             EmptyView()
         case .peek(let badge):
-            PeekView(badge: badge)
+            PeekView(
+                badge: badge,
+                // imminent only when we have a real positive countdown <10m;
+                // 0/missing means the row had no Minutes Until Next value
+                imminentCue: {
+                    let m = manager.summary.currentCue?.minutesUntilNext ?? 0
+                    return m > 0 && m < 10
+                }(),
+                offline: manager.summary.lastError != nil
+            )
         case .expanding, .expanded:
             ExpandedView(manager: manager)
         }

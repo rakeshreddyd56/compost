@@ -12,6 +12,8 @@ struct NotchSummary {
     let drafts: [FrozenDraft]
     let digestReady: Bool
     let digestUrl: URL?
+    let currentCue: CueCard?
+    let lastError: String?  // non-nil means most recent poll failed
 
     var hasAnything: Bool {
         proposalCount + draftCount + (digestReady ? 1 : 0) > 0
@@ -20,7 +22,8 @@ struct NotchSummary {
     static let empty = NotchSummary(
         proposalCount: 0, proposals: [],
         draftCount: 0, drafts: [],
-        digestReady: false, digestUrl: nil
+        digestReady: false, digestUrl: nil,
+        currentCue: nil, lastError: nil
     )
 }
 
@@ -44,7 +47,6 @@ struct Proposal: Identifiable {
 
 struct FrozenDraft: Identifiable {
     let id: String        // page id (the frozenDrafts row)
-    let draftId: String
     let title: String
     let sourcePageId: String
     let original: String
@@ -53,33 +55,61 @@ struct FrozenDraft: Identifiable {
 
     init?(_ page: NotionPage) {
         self.id = page.id
-        self.draftId = page.properties["Draft ID"]?.plainText ?? ""
         self.title = page.properties["Title"]?.plainText ?? "Untitled"
         self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
-        self.original = page.properties["Original"]?.plainText ?? ""
+        self.original = page.properties["Original Snapshot"]?.plainText ?? ""
         self.rewrite = page.properties["Rewrite"]?.plainText ?? ""
-        self.frozenAt = page.properties["Frozen At"]?.plainText ?? ""
+        self.frozenAt = page.properties["Frozen At"]?.date?.start ?? ""
     }
 }
 
 struct WeeklyDigest {
     let weekStart: Date
     let url: URL?
-    let stats: String
 
     init?(_ page: NotionPage) {
-        let weekStartStr = page.properties["Week Start"]?.plainText ?? ""
+        let weekStartStr = page.properties["Week Start"]?.date?.start ?? ""
         let f = ISO8601DateFormatter()
         guard let ws = f.date(from: weekStartStr) ?? Self.tryParse(weekStartStr) else { return nil }
         self.weekStart = ws
-        let pageId = page.properties["Digest Page ID"]?.plainText ?? ""
+        let pageId = page.properties["Summary Page ID"]?.plainText ?? ""
         self.url = URL(string: "notion://www.notion.so/\(pageId.replacingOccurrences(of: "-", with: ""))")
-        self.stats = page.properties["Stats"]?.plainText ?? ""
     }
 
     private static func tryParse(_ s: String) -> Date? {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f.date(from: s.prefix(10).description)
+    }
+}
+
+struct CueCard: Identifiable {
+    let id: String
+    let sourcePageId: String
+    let sourceTitle: String
+    let currentHeading: String
+    let currentBullets: String
+    let nextHeading: String
+    let nextBullets: String
+    let minutesUntilNext: Int
+    let calmCue: String
+
+    init?(_ page: NotionPage) {
+        self.id = page.id
+        self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
+        self.sourceTitle = page.properties["Source Title"]?.plainText ?? ""
+        self.currentHeading = page.properties["Current Heading"]?.plainText ?? ""
+        self.currentBullets = page.properties["Current Bullets"]?.plainText ?? ""
+        self.nextHeading = page.properties["Next Heading"]?.plainText ?? ""
+        self.nextBullets = page.properties["Next Bullets"]?.plainText ?? ""
+        // Notion number property — must read .number, not .plainText (which
+        // would always return "" and thus default to 0, making every cue
+        // look imminent).
+        if let n = page.properties["Minutes Until Next"]?.number {
+            self.minutesUntilNext = Int(n)
+        } else {
+            self.minutesUntilNext = 0
+        }
+        self.calmCue = page.properties["Calm Cue"]?.plainText ?? ""
     }
 }
