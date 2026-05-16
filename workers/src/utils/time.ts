@@ -2,6 +2,8 @@
  * Time helpers. All gates use the user's local timezone (USER_TIMEZONE env var).
  */
 
+import { demoFlagEnabled } from "./demo-mode";
+
 export function currentHourIn(tz: string): number {
   const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false });
   const h = fmt.formatToParts(new Date()).find((p) => p.type === "hour")?.value ?? "0";
@@ -16,7 +18,7 @@ export function currentDayIn(tz: string): number {
 }
 
 export function isLateNight(tz: string): boolean {
-  if (process.env.SLEEP_ON_IT_FORCE_FIRE === "true") return true;
+  if (demoFlagEnabled("SLEEP_ON_IT_FORCE_FIRE")) return true;
   const h = currentHourIn(tz);
   return h >= 22 || h < 6;
 }
@@ -27,7 +29,7 @@ export function isMorningReviewWindow(tz: string): boolean {
 }
 
 export function isSunday(tz: string): boolean {
-  if (process.env.WEEKLY_FORCE_FIRE === "true") return true;
+  if (demoFlagEnabled("WEEKLY_FORCE_FIRE")) return true;
   return currentDayIn(tz) === 0;
 }
 

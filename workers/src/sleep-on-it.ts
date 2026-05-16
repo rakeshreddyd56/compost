@@ -17,6 +17,7 @@ import { sha1 } from "./utils/hashing";
 import { isLateNight, isMorningReviewWindow } from "./utils/time";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 import { notionClient } from "./utils/notion-auth";
+import { demoFlagEnabled } from "./utils/demo-mode";
 
 class WebhookVerificationError extends Error {}
 
@@ -51,7 +52,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
       if (!notionTokenReady()) { warnMissingToken("sleepOnItReviewer"); return emptySync(); }
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
       const notion = notionClient(context);
-      const demoChanges = process.env.SLEEP_ON_IT_FORCE_FIRE === "true"
+      const demoChanges = demoFlagEnabled("SLEEP_ON_IT_FORCE_FIRE")
         ? await demoFrozenDraftChanges(notion)
         : [];
 
@@ -254,7 +255,7 @@ function fallbackRewrite(markdown: string): string {
 // ---------------- DB helpers (skeletons — flesh out using @notionhq/client patterns) ----------------
 
 async function upsertFrozenDraftRow(notion: any, fields: any) {
-  if (process.env.SLEEP_ON_IT_FORCE_FIRE === "true") return;
+  if (demoFlagEnabled("SLEEP_ON_IT_FORCE_FIRE")) return;
 
   const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
   if (!FROZEN_DS) return;
@@ -283,7 +284,7 @@ async function upsertFrozenDraftRow(notion: any, fields: any) {
 }
 
 async function hasActiveDraft(notion: any, pageId: string): Promise<boolean> {
-  if (process.env.SLEEP_ON_IT_FORCE_FIRE === "true") return false;
+  if (demoFlagEnabled("SLEEP_ON_IT_FORCE_FIRE")) return false;
 
   const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
   if (!FROZEN_DS) return false;
