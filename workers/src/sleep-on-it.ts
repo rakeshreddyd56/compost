@@ -15,6 +15,7 @@ import { j } from "@notionhq/workers/schema-builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 import { isLateNight, isMorningReviewWindow } from "./utils/time";
+import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 
 class WebhookVerificationError extends Error {}
 
@@ -24,13 +25,14 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     title: "Late-night edit handler",
     description: "Receives Notion page.content_updated events; freezes late-night drafts for morning review.",
     execute: async (events: any[], context: any) => {
+      // Allow verification handshake even before NOTION_API_TOKEN is set
       for (const event of events) {
-        // First-time verification handshake — Notion sends a verification_token
         if (event.body?.verification_token) {
           // The human MUST run `ntn workers env set NOTION_WEBHOOK_SECRET=<token>` next
           console.log("VERIFICATION TOKEN — set as NOTION_WEBHOOK_SECRET:", event.body.verification_token);
           return { challenge: event.body.verification_token };
         }
+        if (!notionTokenReady()) { warnMissingToken("onLateNightEdit"); continue; }
         verifySignature(event);
         await handleEdit(event, context);
       }
@@ -42,6 +44,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     mode: "incremental",
     schedule: "15m",
     execute: async (state: any, context: any) => {
+      if (!notionTokenReady()) { warnMissingToken("sleepOnItReviewer"); return emptySync(); }
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
       if (!isMorningReviewWindow(tz)) return { changes: [], hasMore: false };
 
@@ -66,6 +69,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     mode: "incremental",
     schedule: "1d",
     execute: async (state: any, context: any) => {
+      if (!notionTokenReady()) { warnMissingToken("sleepOnItCleanup"); return emptySync(); }
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
       if (!FROZEN_DS) return { changes: [], hasMore: false };
 
