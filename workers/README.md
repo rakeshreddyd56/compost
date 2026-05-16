@@ -1,5 +1,31 @@
 # Notion Workers [beta]
 
+## Compost demo commands
+
+The safe demo smoke path lives in `test.sh`:
+
+```shell
+npm run demo:smoke
+```
+
+It runs TypeScript checks, remote `ping`, sync health, and sync previews. It does
+not apply approved cleanup actions.
+
+To refresh managed DB rows before the live notch demo:
+
+```shell
+npm run demo:trigger
+```
+
+To apply approved Gardener rows, use the explicit tool flag:
+
+```shell
+bash ./test.sh --skip-previews --apply-tools
+```
+
+See `docs/DEMO-RUNBOOK.md` for reset commands, demo force flags, and the Notion
+sharing checklist.
+
 A worker is a small Node/TypeScript program hosted by Notion. Workers have three capability types:
 
 - **Tools** — callable functions for Notion custom agents

@@ -4,7 +4,9 @@
 	"private": true,
 	"scripts": {
 		"build": "tsc",
-		"check": "tsc --noEmit"
+		"check": "tsc --noEmit",
+		"demo:smoke": "bash ./test.sh",
+		"demo:trigger": "bash ./test.sh --write"
 	},
 	"engines": {
 		"node": ">=22.0.0",
