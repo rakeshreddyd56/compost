@@ -40,6 +40,7 @@ final class NotchManager: ObservableObject {
     @Published private(set) var hasLoadedOnce: Bool = false
     @Published private(set) var inflight: Set<InflightAction> = []
     @Published private(set) var lastSuccess: SuccessPing?
+    @Published private(set) var lastActionError: String?
 
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
@@ -103,38 +104,67 @@ final class NotchManager: ObservableObject {
 
     func tidyNow() async {
         await runAction(.tidyNow, success: .tidied) {
-            _ = try? await self.notion.invokeTool("tidyNow", input: [:])
+            _ = try await self.notion.invokeTool("tidyNow", input: [:])
         }
     }
 
     func applyApproved() async {
         await runAction(.applyApproved, success: .applied) {
-            _ = try? await self.notion.invokeTool("applyApproved", input: [:])
+            _ = try await self.notion.invokeTool("applyApproved", input: [:])
         }
     }
 
     func reviewDraft(draftId: String, approve: Bool) async {
         await runAction(.reviewDraft(draftId), success: .reviewed(draftId)) {
-            _ = try? await self.notion.invokeTool("reviewDraft", input: [
+            _ = try await self.notion.invokeTool("reviewDraft", input: [
                 "draftId": draftId,
                 "decision": approve ? "approve" : "reject",
             ])
         }
     }
 
-    /// Wrap a tool call with inflight tracking + a short success ping the UI
-    /// can flash to confirm the action landed. Always force-refreshes the
-    /// poller so the badge count catches up immediately.
-    private func runAction(_ action: InflightAction, success: SuccessPing, body: () async -> Void) async {
+    /// Wrap a worker tool call with inflight tracking. Only sets `lastSuccess`
+    /// when the body returns without throwing. A throw goes into
+    /// `lastActionError` so the UI can show a red pip instead of a misleading
+    /// green ✓. Either way we trigger an immediate refresh so the badge
+    /// reflects whatever (if anything) the tool changed.
+    private func runAction(_ action: InflightAction,
+                           success: SuccessPing,
+                           body: () async throws -> Void) async {
         inflight.insert(action)
         defer { inflight.remove(action) }
-        await body()
-        lastSuccess = success
-        await poller.forceRefresh()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            if self?.lastSuccess == success { self?.lastSuccess = nil }
+
+        do {
+            try await body()
+            lastActionError = nil
+            lastSuccess = success
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if self?.lastSuccess == success { self?.lastSuccess = nil }
+            }
+        } catch {
+            lastSuccess = nil
+            lastActionError = Self.describeActionError(error, for: action)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                if self?.lastActionError != nil { self?.lastActionError = nil }
+            }
         }
+
+        // Always refresh — even on failure — so the user sees the real state.
+        await poller.refreshNow()
+    }
+
+    private static func describeActionError(_ error: Error, for action: InflightAction) -> String {
+        let verb: String = {
+            switch action {
+            case .tidyNow:        return "Tidy"
+            case .applyApproved:  return "Apply"
+            case .reviewDraft:    return "Review"
+            }
+        }()
+        let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        return "\(verb) failed: \(detail)"
     }
 
     private func expand() async {

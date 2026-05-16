@@ -1,6 +1,6 @@
 //
 //  CompostPoller.swift
-//  Compost — 60-second polling loop
+//  Compost — 60s steady-state polling loop with on-demand refresh.
 //
 
 import Foundation
@@ -10,51 +10,63 @@ import Combine
 final class CompostPoller {
     private let client: NotionClient
     private var task: Task<Void, Never>?
-    private var forceRefreshFlag = false
+    private var callback: ((NotchSummary) -> Void)?
 
     init(client: NotionClient) {
         self.client = client
     }
 
     func start(callback: @escaping (NotchSummary) -> Void) async {
-        // Note: callback is sync, caller must wrap async calls in Task
-        task = Task {
+        self.callback = callback
+        task?.cancel()
+        task = Task { [weak self] in
             while !Task.isCancelled {
-                do {
-                    let proposals = try await client.fetchProposals()
-                    let drafts = try await client.fetchReadyDrafts()
-                    let digest = try await client.latestWeeklyDigest()
-                    let cue = try await client.currentCueCard()
-
-                    let summary = NotchSummary(
-                        proposalCount: proposals.count,
-                        proposals: proposals,
-                        draftCount: drafts.count,
-                        drafts: drafts,
-                        digestReady: digest != nil,
-                        digestUrl: digest?.url,
-                        currentCue: cue,
-                        lastError: nil
-                    )
-                    await callback(summary)
-                } catch {
-                    print("Polling error: \(error)")
-                    let summary = NotchSummary(
-                        proposalCount: 0, proposals: [],
-                        draftCount: 0, drafts: [],
-                        digestReady: false, digestUrl: nil,
-                        currentCue: nil,
-                        lastError: describe(error)
-                    )
-                    await callback(summary)
-                }
-
-                if forceRefreshFlag {
-                    forceRefreshFlag = false
-                } else {
-                    try? await Task.sleep(for: .seconds(60))
-                }
+                await self?.tick()
+                // Wake early if start() is called again (callback swap) or the
+                // task is cancelled mid-sleep.
+                try? await Task.sleep(for: .seconds(60))
             }
+        }
+    }
+
+    /// Run one fetch cycle and publish the result. Safe to call from action
+    /// handlers — gives the UI an immediate refresh without waiting for the
+    /// 60s loop. Does not interrupt the steady-state loop.
+    func refreshNow() async {
+        await tick()
+    }
+
+    /// Single fetch + publish. Errors get classified into a user-facing string
+    /// and a sentinel summary so the offline UI can render.
+    private func tick() async {
+        guard let cb = callback else { return }
+        do {
+            let proposals = try await client.fetchProposals()
+            let drafts = try await client.fetchReadyDrafts()
+            let digest = try await client.latestWeeklyDigest()
+            let cue = try await client.currentCueCard()
+
+            let summary = NotchSummary(
+                proposalCount: proposals.count,
+                proposals: proposals,
+                draftCount: drafts.count,
+                drafts: drafts,
+                digestReady: digest != nil,
+                digestUrl: digest?.url,
+                currentCue: cue,
+                lastError: nil
+            )
+            cb(summary)
+        } catch {
+            print("Polling error: \(error)")
+            let summary = NotchSummary(
+                proposalCount: 0, proposals: [],
+                draftCount: 0, drafts: [],
+                digestReady: false, digestUrl: nil,
+                currentCue: nil,
+                lastError: describe(error)
+            )
+            cb(summary)
         }
     }
 
@@ -71,13 +83,10 @@ final class CompostPoller {
                 default:         return "HTTP \(code)"
                 }
             case .decoding:    return "Couldn't read Notion response"
+            case .toolFailed(let msg): return msg
             }
         }
         return "Offline"
-    }
-
-    func forceRefresh() {
-        forceRefreshFlag = true
     }
 
     deinit {

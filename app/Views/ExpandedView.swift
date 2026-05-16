@@ -55,6 +55,20 @@ struct ExpandedView: View {
             .padding(.horizontal, GardenStyle.cardPadding)
             .transition(.opacity)
             .accessibilityLabel(successMessage(success))
+        } else if let actionErr = manager.lastActionError {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+                Text(actionErr)
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                Spacer()
+            }
+            .padding(.horizontal, GardenStyle.cardPadding)
+            .transition(.opacity)
+            .accessibilityLabel(actionErr)
         } else if let err = manager.summary.lastError {
             HStack(spacing: 6) {
                 Image(systemName: "wifi.exclamationmark")
