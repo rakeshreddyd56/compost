@@ -86,6 +86,11 @@ final class NotchManager: ObservableObject {
         await poller.forceRefresh()
     }
 
+    func applyApproved() async {
+        _ = try? await notion.invokeTool("applyApproved", input: [:])
+        await poller.forceRefresh()
+    }
+
     func reviewDraft(draftId: String, approve: Bool) async {
         _ = try? await notion.invokeTool("reviewDraft", input: [
             "draftId": draftId,
@@ -123,7 +128,10 @@ struct ContentRouter: View {
         case .hidden, .retracting:
             EmptyView()
         case .peek(let badge):
-            PeekView(badge: badge)
+            PeekView(
+                badge: badge,
+                imminentCue: (manager.summary.currentCue?.minutesUntilNext ?? 999) < 10
+            )
         case .expanding, .expanded:
             ExpandedView(manager: manager)
         }
