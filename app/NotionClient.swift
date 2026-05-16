@@ -11,9 +11,10 @@ struct NotionDbIds {
     let compostPile: String
     let frozenDrafts: String
     let weeklyDigests: String
+    let cueCards: String
     let parentPage: String
 
-    static let empty = NotionDbIds(compostPile: "", frozenDrafts: "", weeklyDigests: "", parentPage: "")
+    static let empty = NotionDbIds(compostPile: "", frozenDrafts: "", weeklyDigests: "", cueCards: "", parentPage: "")
 }
 
 enum NotionError: Error {
@@ -82,6 +83,12 @@ final class NotionClient {
         guard !ids.weeklyDigests.isEmpty else { return nil }
         let pages = try await queryDatabase(ids.weeklyDigests, filter: nil)
         return pages.compactMap(WeeklyDigest.init).max(by: { $0.weekStart < $1.weekStart })
+    }
+
+    func currentCueCard() async throws -> CueCard? {
+        guard !ids.cueCards.isEmpty else { return nil }
+        let pages = try await queryDatabase(ids.cueCards, filter: nil)
+        return pages.compactMap(CueCard.init).first
     }
 
     // MARK: - Tool invocation

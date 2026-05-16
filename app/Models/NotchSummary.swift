@@ -12,6 +12,7 @@ struct NotchSummary {
     let drafts: [FrozenDraft]
     let digestReady: Bool
     let digestUrl: URL?
+    let currentCue: CueCard?
 
     var hasAnything: Bool {
         proposalCount + draftCount + (digestReady ? 1 : 0) > 0
@@ -20,7 +21,8 @@ struct NotchSummary {
     static let empty = NotchSummary(
         proposalCount: 0, proposals: [],
         draftCount: 0, drafts: [],
-        digestReady: false, digestUrl: nil
+        digestReady: false, digestUrl: nil,
+        currentCue: nil
     )
 }
 
@@ -77,5 +79,30 @@ struct WeeklyDigest {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f.date(from: s.prefix(10).description)
+    }
+}
+
+struct CueCard: Identifiable {
+    let id: String
+    let sourcePageId: String
+    let sourceTitle: String
+    let currentHeading: String
+    let currentBullets: String
+    let nextHeading: String
+    let nextBullets: String
+    let minutesUntilNext: Int
+    let calmCue: String
+
+    init?(_ page: NotionPage) {
+        self.id = page.id
+        self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
+        self.sourceTitle = page.properties["Source Title"]?.plainText ?? ""
+        self.currentHeading = page.properties["Current Heading"]?.plainText ?? ""
+        self.currentBullets = page.properties["Current Bullets"]?.plainText ?? ""
+        self.nextHeading = page.properties["Next Heading"]?.plainText ?? ""
+        self.nextBullets = page.properties["Next Bullets"]?.plainText ?? ""
+        let minutesStr = page.properties["Minutes Until Next"]?.plainText ?? "0"
+        self.minutesUntilNext = Int(minutesStr) ?? 0
+        self.calmCue = page.properties["Calm Cue"]?.plainText ?? ""
     }
 }

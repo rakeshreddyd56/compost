@@ -24,6 +24,7 @@ final class CompostPoller {
                     let proposals = try await client.fetchProposals()
                     let drafts = try await client.fetchReadyDrafts()
                     let digest = try await client.latestWeeklyDigest()
+                    let cue = try await client.currentCueCard()
 
                     let summary = NotchSummary(
                         proposalCount: proposals.count,
@@ -31,7 +32,8 @@ final class CompostPoller {
                         draftCount: drafts.count,
                         drafts: drafts,
                         digestReady: digest != nil,
-                        digestUrl: digest?.url
+                        digestUrl: digest?.url,
+                        currentCue: cue
                     )
                     await callback(summary)
                 } catch {

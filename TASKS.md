@@ -4,9 +4,9 @@
 > Format: `- [x] [owner] task` — owner = `workers` | `app` | `shared`.
 
 ## Block A — Sat 10:45a-12p (Scaffold)
-- [ ] [shared] Create GitHub repo, push initial commit with AGENTS.md, CLAUDE.md, INTERFACE.md, TASKS.md, LICENSE, README stub
+- [x] [shared] Create GitHub repo, push initial commit with AGENTS.md, CLAUDE.md, INTERFACE.md, TASKS.md, LICENSE, README stub
 - [ ] [workers] `ntn workers new` in `workers/`, deploy hello-world `tool("ping")`, verify via `ntn workers exec ping --local`
-- [ ] [app] New SwiftUI app `Compost.app` in `app/`, add `DynamicNotchKit` Swift package, render hello-world notch
+- [x] [app] New SwiftUI app `Compost.app` in `app/`, add `DynamicNotchKit` Swift package, render hello-world notch
 - [ ] [shared] Verify both halves run before lunch
 
 ## Block B — Sat 12:30-3p (Gardener core)
@@ -16,13 +16,13 @@
 - [ ] [workers] Implement stub signal
 - [ ] [workers] Combine into decay score, surface ≥0.60 → write proposals to `compostPile`
 - [ ] [workers] Schedule: `worker.sync("gardener", { schedule: "1d", ... })` (internal hour-gate optional in v1)
-- [ ] [app] Poll Notion for `compostPile` row count, show as badge on notch
+- [x] [app] Poll Notion for `compostPile` row count, show as badge on notch
 
 ## Block C — Sat 3-4:30p (Approve + apply)
 - [ ] [workers] Apply pass: read `Approved=true AND Applied=false`, execute (archive/merge/fix), stamp `Applied=true`
 - [ ] [workers] Idempotency: never re-apply stamped rows
-- [ ] [app] Expanded notch state with proposal list (read from `compostPile`)
-- [ ] [app] Tap row → open in Notion via deep link
+- [x] [app] Expanded notch state with proposal list (read from `compostPile`)
+- [x] [app] Tap row → open in Notion via deep link
 
 ## Block D — Sat 4:30-6p (Sleep-On-It)
 - [ ] [workers] `webhook("onLateNightEdit")` accepting Notion automation payload
@@ -81,9 +81,18 @@
 
 ---
 
-## 🔥 Current focus (post-S1, pre-S2)
+## 🔥 Current focus (post-S2, start S3)
 
-**Codex 5.5 — start here in S2:**
+**Claude Code — S3 priorities:**
+1. ✅ S2 COMPLETE: Notch app shell buildable and all models aligned with INTERFACE.md
+2. S3 focus: Robustness and pre-S7 setup
+   - [ ] Test end-to-end with real Notion data (SetupView flow)
+   - [ ] Error handling: token invalid, network timeout, API rate limit
+   - [ ] WakeTrigger verification (pmset sleepnow to test)
+   - [ ] Proposal row: verify Notion deep link works
+   - [ ] Add CueCard model in prep for S7 (wake greeting + cue display)
+
+**Codex 5.5 — S2/S3 for Workers:**
 1. Open `.agents/skills/sync-guide/SKILL.md` — it auto-loads but read it explicitly
 2. Update each `registerX(worker, { ..., pacer })` function signature to type and use the pacer
 3. Inside every `execute()` that calls `context.notion.*`, do `await pacer.wait()` first

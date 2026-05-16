@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 compostPile: compostDbId,
                 frozenDrafts: frozenDbId,
                 weeklyDigests: Keychain.get(.weeklyDigestsDbId) ?? "",
+                cueCards: Keychain.get(.cueCardsDbId) ?? "",
                 parentPage: parentId
             )
         )
@@ -61,6 +62,7 @@ struct SetupView: View {
     @State private var compostDbId: String = ""
     @State private var frozenDbId: String = ""
     @State private var weeklyDigestsDbId: String = ""
+    @State private var cueCardsDbId: String = ""
 
     var body: some View {
         Form {
@@ -71,7 +73,8 @@ struct SetupView: View {
             Section("Database IDs (from INTERFACE.md)") {
                 TextField("compostPile DB ID", text: $compostDbId)
                 TextField("frozenDrafts DB ID", text: $frozenDbId)
-                TextField("weeklyDigests DB ID", text: $weeklyDigestsDbId)
+                TextField("weeklyDigests DB ID (optional)", text: $weeklyDigestsDbId)
+                TextField("cueCards DB ID (optional)", text: $cueCardsDbId)
             }
             Button("Save and start") {
                 Keychain.set(.notionToken, token)
@@ -79,6 +82,7 @@ struct SetupView: View {
                 Keychain.set(.compostPileDbId, compostDbId)
                 Keychain.set(.frozenDraftsDbId, frozenDbId)
                 Keychain.set(.weeklyDigestsDbId, weeklyDigestsDbId)
+                Keychain.set(.cueCardsDbId, cueCardsDbId)
                 // Relaunch so AppDelegate picks up
                 NSApp.terminate(nil)
             }
