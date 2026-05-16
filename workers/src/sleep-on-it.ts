@@ -10,7 +10,7 @@
  */
 
 import crypto from "node:crypto";
-import { Builder } from "@notionhq/workers";
+import * as Builder from "@notionhq/workers/builder";
 import { j } from "@notionhq/workers/schema-builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";

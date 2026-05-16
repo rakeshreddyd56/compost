@@ -10,7 +10,7 @@
  * - Upserts to cueCards (idempotent by pageId + currentStartISO).
  */
 
-import { Builder } from "@notionhq/workers";
+import * as Builder from "@notionhq/workers/builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 

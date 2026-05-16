@@ -8,7 +8,7 @@
  * - Composes a beautiful digest page in Notion.
  */
 
-import { Builder } from "@notionhq/workers";
+import * as Builder from "@notionhq/workers/builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 import { isSunday, startOfWeekSunday } from "./utils/time";

@@ -10,7 +10,7 @@
  *   S8 → Phase 3 (embedding-based dedup) + merge action.
  */
 
-import { Builder } from "@notionhq/workers";
+import * as Builder from "@notionhq/workers/builder";
 import { pace, sleep, withRetryOn429 } from "./utils/rate-limit";
 import { sha1, proposalId } from "./utils/hashing";
 import {

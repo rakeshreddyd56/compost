@@ -1,25 +1,21 @@
 {
-  "name": "compost-workers",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Compost — Notion Workers that give your workspace a sense of time",
-  "license": "MIT",
-  "main": "dist/index.js",
-  "scripts": {
-    "build": "tsc",
-    "check": "tsc --noEmit",
-    "deploy": "ntn workers deploy",
-    "logs": "ntn workers runs logs --follow",
-    "trigger:gardener": "ntn workers sync trigger gardener",
-    "trigger:weekly": "ntn workers sync trigger weekly",
-    "tool:tidy": "ntn workers exec tidyNow --remote -d '{}'",
-    "webhooks:list": "ntn workers webhooks list"
-  },
-  "dependencies": {
-    "@notionhq/workers": "*"
-  },
-  "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0"
-  }
+	"name": "@notionhq/workers-template",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"build": "tsc",
+		"check": "tsc --noEmit"
+	},
+	"engines": {
+		"node": ">=22.0.0",
+		"npm": ">=10.9.2"
+	},
+	"devDependencies": {
+		"@types/node": "^22.9.0",
+		"tsx": "^4.20.6",
+		"typescript": "^5.8.0"
+	},
+	"dependencies": {
+		"@notionhq/workers": ">=0.0.0"
+	}
 }
