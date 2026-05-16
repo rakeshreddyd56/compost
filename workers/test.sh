@@ -2,7 +2,8 @@
 # Compost worker demo smoke checks.
 #
 # Default mode is safe: TypeScript check, ping, sync status, and sync previews.
-# Use --write to trigger live sync writes. Use --apply-tools to run tidyNow.
+# Use --write to trigger live sync writes. Use --apply-tools to run tidyNow
+# and the applyProposal contract check.
 
 set -euo pipefail
 
@@ -10,7 +11,7 @@ cd "$(dirname "$0")"
 
 usage() {
   cat <<'EOF'
-Usage: bash ./test.sh [--write] [--apply-tools] [--skip-previews] [--skip-logs]
+Usage: bash ./test.sh [--write] [--apply-tools] [--apply-proposal ID] [--legacy-apply-approved] [--skip-previews] [--skip-logs]
 
 Safe default:
   - npm run check
@@ -19,10 +20,12 @@ Safe default:
   - preview cue, sleepOnItReviewer, gardener, sleepOnItCleanup
 
 Options:
-  --write          Trigger cue, sleepOnItReviewer, and gardener for real writes.
-  --apply-tools    Run tidyNow/applyApproved. This can change approved Notion pages.
-  --skip-previews  Skip sync previews.
-  --skip-logs      Skip latest run logs.
+  --write                  Trigger cue, sleepOnItReviewer, and gardener for real writes.
+  --apply-tools            Run tidyNow and verify applyProposal's ok=false contract.
+  --apply-proposal ID      Apply one explicit safe demo proposal through applyProposal.
+  --legacy-apply-approved  Also run the legacy batch applyApproved tool.
+  --skip-previews          Skip sync previews.
+  --skip-logs              Skip latest run logs.
 
 Set COMPOST_WORKER_ID when workers.json is absent:
   COMPOST_WORKER_ID=019e31dc-050f-7a85-974a-21954fd261f5 bash ./test.sh
@@ -31,6 +34,8 @@ EOF
 
 WRITE=0
 APPLY_TOOLS=0
+APPLY_PROPOSAL_ID="${COMPOST_DEMO_PROPOSAL_ID:-}"
+LEGACY_APPLY_APPROVED=0
 SKIP_PREVIEWS=0
 SKIP_LOGS=0
 
@@ -38,6 +43,16 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --write) WRITE=1 ;;
     --apply-tools) APPLY_TOOLS=1 ;;
+    --apply-proposal)
+      shift
+      if [[ $# -eq 0 || -z "${1:-}" ]]; then
+        echo "--apply-proposal requires a Proposal ID" >&2
+        exit 2
+      fi
+      APPLY_PROPOSAL_ID="$1"
+      APPLY_TOOLS=1
+      ;;
+    --legacy-apply-approved) LEGACY_APPLY_APPROVED=1 ;;
     --skip-previews) SKIP_PREVIEWS=1 ;;
     --skip-logs) SKIP_LOGS=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -134,12 +149,39 @@ else
 fi
 
 if [[ "$APPLY_TOOLS" -eq 1 ]]; then
-  section "Apply approved tools"
+  section "Tidy proposal refresh"
   run "$NTN" workers exec "${WORKER_ARGS[@]}" tidyNow -d '{}'
-  run "$NTN" workers exec "${WORKER_ARGS[@]}" applyApproved -d '{}'
+
+  section "applyProposal missing-row contract"
+  set +e
+  missing_output="$("$NTN" workers exec "${WORKER_ARGS[@]}" applyProposal -d '{"proposalId":"__missing_smoke__"}' 2>&1)"
+  missing_status=$?
+  set -e
+  printf '%s\n' "$missing_output"
+  if [[ "$missing_status" -ne 0 ]]; then
+    echo "applyProposal missing-row check failed at CLI level." >&2
+    exit "$missing_status"
+  fi
+  if ! printf '%s\n' "$missing_output" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*false|proposal not found'; then
+    echo "applyProposal should return ok=false for a missing proposal." >&2
+    exit 1
+  fi
+
+  if [[ -n "$APPLY_PROPOSAL_ID" ]]; then
+    section "Apply explicit safe demo proposal"
+    run "$NTN" workers exec "${WORKER_ARGS[@]}" applyProposal -d "{\"proposalId\":\"$APPLY_PROPOSAL_ID\"}"
+  else
+    section "Explicit proposal apply skipped"
+    echo "Set COMPOST_DEMO_PROPOSAL_ID or pass --apply-proposal ID to mutate one safe demo target."
+  fi
+
+  if [[ "$LEGACY_APPLY_APPROVED" -eq 1 ]]; then
+    section "Legacy batch applyApproved"
+    run "$NTN" workers exec "${WORKER_ARGS[@]}" applyApproved -d '{}'
+  fi
 else
   section "Apply tools skipped"
-  echo "Use --apply-tools only after approving rows in Compost Pile."
+  echo "Use --apply-tools to refresh proposals and verify applyProposal; pass --apply-proposal ID to mutate one safe demo target."
 fi
 
 if [[ "$SKIP_LOGS" -eq 0 ]]; then

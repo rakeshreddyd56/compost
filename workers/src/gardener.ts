@@ -29,6 +29,21 @@ export interface ApplyApprovedResult {
   error?: string;
 }
 
+export interface ApplyProposalResult {
+  ok: boolean;
+  proposalId: string;
+  action: string | null;
+  targetPageId: string | null;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface RefreshProposalsResult {
+  proposed: number;
+  upserted: number;
+  errors: number;
+}
+
 export function registerGardener(worker: any, dbs: { compostPile: any; embeddingsCache: any; pacer: any }) {
 
   worker.sync("gardener", {
@@ -42,23 +57,36 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
       const pages = await walkWorkspace(notion);
 
       // --- Phase 2: Score ---
-      const linkGraph = buildLinkGraph(pages);
-      const scored = pages.map((p) => scoreOne(p, linkGraph));
-
-      // --- Phase 4: Propose ---
-      const proposalChanges = scored
-        .filter((s) => s.decay >= DECAY_THRESHOLD)
-        .map(toProposalChange);
+      const proposalChanges = buildProposalChanges(pages);
 
       // --- Phase 5: Apply ---
       const applyChanges = (await applyApproved(notion)).map(toApplyChange);
 
-      return {
-        changes: [...proposalChanges, ...applyChanges],
-        hasMore: false,
-      };
+      return { changes: [...proposalChanges, ...applyChanges], hasMore: false };
     },
   });
+}
+
+export async function refreshProposals(notion: any): Promise<RefreshProposalsResult> {
+  const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
+  if (!COMPOST_PILE_DATA_SOURCE_ID) return { proposed: 0, upserted: 0, errors: 1 };
+
+  const proposals = buildProposals(await walkWorkspace(notion));
+  let upserted = 0;
+  let errors = 0;
+
+  for (const proposal of proposals) {
+    try {
+      await upsertProposalRow(notion, COMPOST_PILE_DATA_SOURCE_ID, proposal);
+      upserted += 1;
+    } catch (e: any) {
+      console.warn(`tidyNow failed to upsert ${proposal.proposalId}:`, String(e));
+      errors += 1;
+    }
+    await pace();
+  }
+
+  return { proposed: proposals.length, upserted, errors };
 }
 
 // ---------------- Phase 1 ----------------
@@ -146,22 +174,52 @@ function scoreOne(page: any, linkGraph: { inbound: Map<string, number>; knownIds
 
 // ---------------- Phase 4: Propose ----------------
 
-function toProposalChange(s: { page: any; signals: Signals; decay: number }) {
+interface Proposal {
+  title: string;
+  proposalId: string;
+  action: string;
+  targetPageId: string;
+  reason: string;
+}
+
+function buildProposalChanges(pages: any[]) {
+  return buildProposals(pages).map(proposalChangeFromProposal);
+}
+
+function buildProposals(pages: any[]) {
+  const linkGraph = buildLinkGraph(pages);
+  return pages
+    .map((p) => scoreOne(p, linkGraph))
+    .filter((s) => s.decay >= DECAY_THRESHOLD)
+    .map(toProposal);
+}
+
+function proposalChangeFromProposal(proposal: Proposal) {
+  return {
+    type: "upsert" as const,
+    key: proposal.proposalId,
+    properties: {
+      Title:            Builder.title(proposal.title),
+      "Proposal ID":    Builder.richText(proposal.proposalId),
+      "Action":         Builder.select(proposal.action),
+      "Target Page ID": Builder.richText(proposal.targetPageId),
+      "Reason":         Builder.richText(proposal.reason),
+      "Approved":       Builder.checkbox(false),
+      "Applied":        Builder.checkbox(false),
+    },
+  };
+}
+
+function toProposal(s: { page: any; signals: Signals; decay: number }): Proposal {
   const action = pickAction(s.signals);
   const id = proposalId(action, [s.page.id]);
   const emoji: Record<string, string> = { archive: "🗑️", delete_stub: "🌱", fix_link: "🔗", add_tag: "🏷️", merge: "🔀" };
   return {
-    type: "upsert" as const,
-    key: id,
-    properties: {
-      Title:            Builder.title(`${emoji[action] ?? "•"} ${pageTitle(s.page)}`),
-      "Proposal ID":    Builder.richText(id),
-      "Action":         Builder.select(action),
-      "Target Page ID": Builder.richText(s.page.id),
-      "Reason":         Builder.richText(describeReason(s.signals)),
-      "Approved":       Builder.checkbox(false),
-      "Applied":        Builder.checkbox(false),
-    },
+    title: `${emoji[action] ?? "•"} ${pageTitle(s.page)}`,
+    proposalId: id,
+    action,
+    targetPageId: s.page.id,
+    reason: describeReason(s.signals),
   };
 }
 
@@ -205,28 +263,124 @@ export async function applyApproved(notion: any): Promise<ApplyApprovedResult[]>
 
   const changes: ApplyApprovedResult[] = [];
   for (const row of res.results) {
-    const id = readText(row, "Proposal ID");
-    try {
-      await executeAction(notion, row);
-      await stampProposal(notion, row.id, { applied: true });
-      changes.push({ proposalId: id, applied: true });
-    } catch (e: any) {
-      const error = String(e).slice(0, 1900);
-      await stampProposal(notion, row.id, { applied: false, error });
-      changes.push({ proposalId: id, applied: false, error });
-    }
+    const result = await applyProposalRow(notion, row);
+    changes.push({
+      proposalId: result.proposalId,
+      applied: result.ok && result.applied,
+      error: result.error ?? undefined,
+    });
     await pace();
   }
   return changes;
 }
 
-async function stampProposal(notion: any, pageId: string, fields: { applied: boolean; error?: string }) {
-  const properties: any = {};
-  if (fields.applied) {
-    properties.Applied = { checkbox: true };
+export async function applyProposal(notion: any, rawProposalId: string): Promise<ApplyProposalResult> {
+  const proposalId = String(rawProposalId ?? "").trim();
+  const empty = (error: string): ApplyProposalResult => ({
+    ok: false,
+    proposalId,
+    action: null,
+    targetPageId: null,
+    applied: false,
+    error,
+  });
+
+  if (!proposalId) return empty("Missing proposalId");
+
+  const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
+  if (!COMPOST_PILE_DATA_SOURCE_ID) {
+    return empty("COMPOST_PILE_DATA_SOURCE_ID not set");
+  }
+
+  let row: any | null;
+  try {
+    row = await fetchProposalRow(notion, COMPOST_PILE_DATA_SOURCE_ID, proposalId);
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) return empty("Compost Pile data source is not shared with the integration");
+    return empty(shortError(e));
+  }
+
+  if (!row) return empty("proposal not found");
+  return applyProposalRow(notion, row);
+}
+
+async function applyProposalRow(notion: any, row: any): Promise<ApplyProposalResult> {
+  const proposalId = readText(row, "Proposal ID");
+  const action = readSelect(row, "Action");
+  const targetPageId = readText(row, "Target Page ID");
+  const fail = async (error: string): Promise<ApplyProposalResult> => {
+    await stampProposal(notion, row.id, { applied: false, error: shortError(error) });
+    return { ok: false, proposalId, action, targetPageId, applied: false, error: shortError(error) };
+  };
+
+  if (!proposalId) return fail("Missing Proposal ID");
+  if (!action) return fail("Missing Action");
+  if (!targetPageId) return fail("Missing Target Page ID");
+  if (readCheckbox(row, "Applied")) {
+    return { ok: true, proposalId, action, targetPageId, applied: true, error: null };
+  }
+
+  try {
+    await assertSafeDemoTarget(notion, targetPageId);
+    await executeAction(notion, row);
+    await stampProposal(notion, row.id, { approved: true, applied: true, error: null });
+    return { ok: true, proposalId, action, targetPageId, applied: true, error: null };
+  } catch (e: any) {
+    return fail(e);
+  }
+}
+
+async function upsertProposalRow(notion: any, dataSourceId: string, proposal: Proposal) {
+  const existing = await fetchProposalRow(notion, dataSourceId, proposal.proposalId);
+  const properties = proposalProperties(proposal, { includeWorkflowFields: !existing });
+
+  if (existing) {
+    await notion.pages.update({ page_id: existing.id, properties });
+    return;
+  }
+
+  await notion.pages.create({
+    parent: { data_source_id: dataSourceId },
+    properties,
+  });
+}
+
+async function fetchProposalRow(notion: any, dataSourceId: string, proposalId: string): Promise<any | null> {
+  const res: any = await withRetryOn429(() =>
+    notion.dataSources.query({
+      data_source_id: dataSourceId,
+      filter: { property: "Proposal ID", rich_text: { equals: proposalId } },
+    })
+  );
+  return res.results[0] ?? null;
+}
+
+function proposalProperties(proposal: Proposal, opts: { includeWorkflowFields: boolean }) {
+  const properties: any = {
+    Title: titleProp(proposal.title),
+    "Proposal ID": richTextProp(proposal.proposalId),
+    Action: { select: { name: proposal.action } },
+    "Target Page ID": richTextProp(proposal.targetPageId),
+    Reason: richTextProp(proposal.reason),
+  };
+  if (opts.includeWorkflowFields) {
+    properties.Approved = { checkbox: false };
+    properties.Applied = { checkbox: false };
     properties.Error = { rich_text: [] };
   }
-  if (fields.error) properties.Error = richTextProp(fields.error);
+  return properties;
+}
+
+async function stampProposal(notion: any, pageId: string, fields: { approved?: boolean; applied?: boolean; error?: string | null }) {
+  const properties: any = {};
+  if (fields.approved != null) properties.Approved = { checkbox: fields.approved };
+  if (fields.applied != null) properties.Applied = { checkbox: fields.applied };
+  if (fields.error === null) {
+    properties.Error = { rich_text: [] };
+  } else if (fields.error) {
+    properties.Error = richTextProp(fields.error);
+  }
+  if (Object.keys(properties).length === 0) return;
   await notion.pages.update({ page_id: pageId, properties });
 }
 
@@ -251,14 +405,9 @@ async function executeAction(notion: any, row: any) {
       });
       break;
     case "fix_link":
-      // TODO S5: walk page, find dead internal mentions, remove or replace
-      break;
-    case "merge": {
-      // TODO S8: merge implementation
-      const mergeWith = readText(row, "Merge With Page ID");
-      if (mergeWith) await mergeIntoTarget(notion, mergeWith, target);
-      break;
-    }
+      throw new Error("fix_link proposals are not implemented in the live demo yet");
+    case "merge":
+      throw new Error("merge proposals are not implemented in the live demo yet");
     default:
       throw new Error(`unknown action: ${action}`);
   }
@@ -294,6 +443,24 @@ function readText(row: any, key: string): string {
   if (p.type === "rich_text") return (p.rich_text ?? []).map((t: any) => t.plain_text).join("");
   if (p.type === "title")     return (p.title ?? []).map((t: any) => t.plain_text).join("");
   return "";
+}
+
+function readSelect(row: any, key: string): string {
+  return row.properties?.[key]?.select?.name ?? "";
+}
+
+function readCheckbox(row: any, key: string): boolean {
+  return row.properties?.[key]?.checkbox === true;
+}
+
+async function assertSafeDemoTarget(notion: any, pageId: string) {
+  const page: any = await withRetryOn429(() => notion.pages.retrieve({ page_id: pageId }));
+  if (DEMO_GARDENER_RE.test(pageTitle(page))) return;
+
+  const blocks = page.archived ? [] : await fetchFirstBlocks(notion, pageId, 20);
+  if (isDemoGardenerSeed(page, blocks)) return;
+
+  throw new Error("Refusing to mutate non-demo page. Add [!compost] to the target page title/body for this hackathon demo.");
 }
 
 function wordCountOfBlocks(blocks: any[]): number {
@@ -344,6 +511,16 @@ function richTextProp(text: string) {
       text: { content },
     })),
   };
+}
+
+function titleProp(text: string) {
+  return {
+    title: [{ type: "text", text: { content: String(text).slice(0, 1800) || "Untitled" } }],
+  };
+}
+
+function shortError(e: any): string {
+  return String(e?.message ?? e).slice(0, 1900);
 }
 
 function chunkText(text: string, size = 1800): string[] {

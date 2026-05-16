@@ -8,8 +8,10 @@ parallel.
 
 - Default smoke checks are read-only or preview-only.
 - Live sync triggers only write to managed Worker databases.
-- `tidyNow` and `applyApproved` only run when passed `--apply-tools`.
-- Gardener actions still require `Approved=true` and `Applied=false`.
+- `tidyNow` refreshes proposal rows only; it does not mutate target pages.
+- `applyProposal` mutates only explicit safe demo pages marked `[!compost]`,
+  `[!gardener]`, or `[!stale]`.
+- Legacy `applyApproved` only runs when passed `--legacy-apply-approved`.
 - `sleepOnItCleanup` is previewed during demo smoke checks, but not triggered by
   `--write`.
 
@@ -53,14 +55,20 @@ That runs real triggers for:
 
 It intentionally does not trigger `sleepOnItCleanup`.
 
-## Apply approved cleanup
+## Refresh and apply one cleanup
 
-Only run this after you have checked `Approved` on the intended Compost Pile
-rows:
+Refresh proposals without mutating target pages:
 
 ```bash
 cd /Users/rakeshreddy/compost/workers
 bash ./test.sh --skip-previews --apply-tools
+```
+
+Apply one explicit safe demo proposal from the notch row:
+
+```bash
+cd /Users/rakeshreddy/compost/workers
+bash ./test.sh --skip-previews --apply-proposal <proposal-id>
 ```
 
 ## Demo force flags
