@@ -283,6 +283,9 @@ struct ExpandedView: View {
     }
 
     private var mascotMood: Mascot.Mood {
+        if manager.inflight.contains(.tidyNow) || manager.inflight.contains(.applyApproved) {
+            return .sweep
+        }
         if manager.summary.lastError != nil { return .calm }
         let imminent = (manager.summary.currentCue?.minutesUntilNext ?? 0)
         if imminent > 0 && imminent < 10 { return .alert }

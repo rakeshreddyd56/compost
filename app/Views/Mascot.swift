@@ -1,22 +1,42 @@
 //
 //  Mascot.swift
-//  Compost — first-pass mascot loader.
+//  Compost — mascot loader with per-mood assets + graceful fallbacks.
 //
-//  Loads "Mascot" from Assets.xcassets. The shipped art is a low-effort sage
-//  sprout placeholder; drop a real PNG over Assets.xcassets/Mascot.imageset/
-//  mascot{,@2x,@3x}.png to upgrade without touching code. If the asset is
-//  missing entirely the view falls back to an SF Symbol so the UI never
-//  ships with a broken-image placeholder.
+//  Lookup chain for each mood:
+//    1. Mood-specific asset (MascotCalm / MascotNudging / MascotAlert /
+//       MascotSweep) — newest art for that emotional beat.
+//    2. Canonical "Mascot" asset — safe default if the mood art is missing.
+//    3. SF Symbol — ultimate fallback so the bundle never ships a broken
+//       image placeholder.
 //
 
 import SwiftUI
 import AppKit
 
 struct Mascot: View {
-    enum Mood {
-        case calm     // default — empty workspace, ambient peek
-        case nudging  // proposals or drafts pending
-        case alert    // imminent cue / something time-sensitive
+    enum Mood: String, CaseIterable {
+        case calm     // workspace is empty / idle
+        case nudging  // proposals or drafts pending — "look at this"
+        case alert    // imminent cue / time-sensitive moment
+        case sweep    // Gardener actively running / tidy in flight
+
+        var assetName: String {
+            switch self {
+            case .calm:    return "MascotCalm"
+            case .nudging: return "MascotNudging"
+            case .alert:   return "MascotAlert"
+            case .sweep:   return "MascotSweep"
+            }
+        }
+
+        var fallbackSymbol: String {
+            switch self {
+            case .calm:    return "leaf.fill"
+            case .nudging: return "sparkles"
+            case .alert:   return "sun.max.fill"
+            case .sweep:   return "wand.and.stars.inverse"
+            }
+        }
     }
 
     var size: CGFloat = 56
@@ -24,45 +44,39 @@ struct Mascot: View {
 
     var body: some View {
         Group {
-            if let nsImage = NSImage(named: "Mascot") {
+            if let nsImage = NSImage(named: mood.assetName) ?? NSImage(named: "Mascot") {
                 Image(nsImage: nsImage)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
             } else {
-                Image(systemName: fallbackSymbol)
+                Image(systemName: mood.fallbackSymbol)
                     .resizable()
                     .scaledToFit()
                     .foregroundColor(tint)
             }
         }
         .frame(width: size, height: size)
-        .opacity(mood == .calm ? 0.9 : 1.0)
-        .accessibilityHidden(true)  // mascot is decorative; label lives on its container
-    }
-
-    private var fallbackSymbol: String {
-        switch mood {
-        case .calm:    return "leaf.fill"
-        case .nudging: return "sparkles"
-        case .alert:   return "sun.max.fill"
-        }
+        .opacity(mood == .calm ? 0.95 : 1.0)
+        .accessibilityHidden(true)  // decorative; the container reads its own label
     }
 
     private var tint: Color {
         switch mood {
-        case .calm:    return GardenStyle.accentGreen
-        case .nudging: return GardenStyle.accentGreen
-        case .alert:   return .orange
+        case .calm, .nudging, .sweep: return GardenStyle.accentGreen
+        case .alert:                   return .orange
         }
     }
 }
 
 #Preview {
     HStack(spacing: 24) {
-        Mascot(size: 64, mood: .calm)
-        Mascot(size: 64, mood: .nudging)
-        Mascot(size: 64, mood: .alert)
+        ForEach(Mascot.Mood.allCases, id: \.self) { mood in
+            VStack {
+                Mascot(size: 80, mood: mood)
+                Text(mood.rawValue).font(.caption2)
+            }
+        }
     }
     .padding()
     .background(.regularMaterial)
