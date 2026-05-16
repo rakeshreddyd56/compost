@@ -96,9 +96,10 @@ struct ExpandedView: View {
 
     private func successMessage(_ ping: SuccessPing) -> String {
         switch ping {
-        case .tidied:    return "Tidy run kicked off"
-        case .applied:   return "Approved proposals applied"
-        case .reviewed:  return "Draft reviewed"
+        case .tidied:                     return "Tidy run kicked off"
+        case .applied:                    return "Approved proposals applied"
+        case .proposalApplied(let title): return "Applied: \(title)"
+        case .reviewed:                   return "Draft reviewed"
         }
     }
 
@@ -129,7 +130,9 @@ struct ExpandedView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    applyButton
+                    // Global "Apply approved" removed in favour of per-row
+                    // "Approve & apply" buttons (see ProposalRow). Each row
+                    // is reviewable independently so users opt in per item.
                 }
 
                 if manager.summary.draftCount > 0 {
@@ -237,30 +240,6 @@ struct ExpandedView: View {
         .help("Trigger Gardener worker now")
         .accessibilityLabel(busy ? "Tidy in progress" : "Tidy now")
         .accessibilityHint("Runs the Gardener worker to refresh proposals")
-    }
-
-    private var applyButton: some View {
-        let busy = manager.inflight.contains(.applyApproved)
-        return Button(action: { Task { await manager.applyApproved() } }) {
-            HStack(spacing: 4) {
-                if busy {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else {
-                    Image(systemName: "checkmark.seal.fill").font(.caption)
-                }
-                Text(busy ? "Applying…" : "Apply approved").font(.caption.weight(.semibold))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
-            .opacity(busy ? 0.85 : 1.0)
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
-        .help("Apply rows marked Approved in Notion")
-        .accessibilityLabel(busy ? "Apply in progress" : "Apply approved proposals")
     }
 
     // MARK: - Helpers

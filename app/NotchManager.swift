@@ -22,6 +22,7 @@ enum NotchState: Equatable {
 enum InflightAction: Hashable {
     case tidyNow
     case applyApproved
+    case applyProposal(String)   // per-proposal apply, keyed by proposalId
     case reviewDraft(String)
 }
 
@@ -30,6 +31,7 @@ enum InflightAction: Hashable {
 enum SuccessPing: Equatable {
     case tidied
     case applied
+    case proposalApplied(String) // payload = proposal title for the pip text
     case reviewed(String)
 }
 
@@ -41,6 +43,11 @@ final class NotchManager: ObservableObject {
     @Published private(set) var inflight: Set<InflightAction> = []
     @Published private(set) var lastSuccess: SuccessPing?
     @Published private(set) var lastActionError: String?
+    /// Inline error attached to a single proposal so the failing row can show
+    /// what the worker said. Keyed by proposalId. Cleared on the next refresh
+    /// that returns the proposal (so the same id keeps the error until either
+    /// the user retries successfully or the row vanishes).
+    @Published private(set) var proposalErrors: [String: String] = [:]
 
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
@@ -78,6 +85,10 @@ final class NotchManager: ObservableObject {
     private func applySummary(_ s: NotchSummary) async {
         summary = s
         if s.lastError == nil { hasLoadedOnce = true }
+        // Drop stale per-proposal errors for proposals that are no longer
+        // in the summary (applied, archived, or otherwise gone).
+        let liveIds = Set(s.proposals.map { $0.proposalId })
+        proposalErrors = proposalErrors.filter { liveIds.contains($0.key) }
         let total = s.proposalCount + s.draftCount + (s.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state {
@@ -146,6 +157,46 @@ final class NotchManager: ObservableObject {
         }
     }
 
+    /// Approve and apply a single proposal in one click. Calls the Worker
+    /// `applyProposal` tool with the proposal's stable id, tracks per-row
+    /// inflight state, and writes any worker error into `proposalErrors[pid]`
+    /// so the failing row can render the message inline. Per task: "Do not
+    /// fake success" — only a clean tool return sets `lastSuccess`.
+    func applyProposal(_ proposal: Proposal) async {
+        let pid = proposal.proposalId
+        guard !pid.isEmpty else {
+            // Without a stable id we can't address the row server-side.
+            proposalErrors[proposal.id] = "Missing Proposal ID — cannot apply"
+            return
+        }
+
+        let action = InflightAction.applyProposal(pid)
+        let success = SuccessPing.proposalApplied(proposal.title)
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+
+        do {
+            _ = try await notion.invokeTool("applyProposal", input: ["proposalId": pid])
+            // Real success: clear any prior inline error + flash top-pip.
+            proposalErrors.removeValue(forKey: pid)
+            lastActionError = nil
+            lastSuccess = success
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if self?.lastSuccess == success { self?.lastSuccess = nil }
+            }
+        } catch {
+            // Per-proposal error stays attached to the row until the next
+            // successful retry or until the row vanishes from the poll.
+            let msg = (error as? LocalizedError)?.errorDescription
+                  ?? String(describing: error)
+            proposalErrors[pid] = msg
+            lastSuccess = nil
+        }
+
+        await poller.refreshNow()
+    }
+
     /// Wrap a worker tool call with inflight tracking. Only sets `lastSuccess`
     /// when the body returns without throwing. A throw goes into
     /// `lastActionError` so the UI can show a red pip instead of a misleading
@@ -181,9 +232,10 @@ final class NotchManager: ObservableObject {
     private static func describeActionError(_ error: Error, for action: InflightAction) -> String {
         let verb: String = {
             switch action {
-            case .tidyNow:        return "Tidy"
-            case .applyApproved:  return "Apply"
-            case .reviewDraft:    return "Review"
+            case .tidyNow:         return "Tidy"
+            case .applyApproved:   return "Apply"
+            case .applyProposal:   return "Apply"
+            case .reviewDraft:     return "Review"
             }
         }()
         let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)

@@ -95,6 +95,20 @@ Per-proposal apply path. The macOS app calls this when the user clicks
 - Return `{ ok: false, error: "..." }` on failure instead of throwing so the
   row can show the exact reason inline.
 
+### `applyProposal`
+```typescript
+input:  { proposalId: string }                            // stable `Proposal ID` rich_text from compostPile
+output: { ok: boolean, error?: string, applied?: number } // ok=false MUST include `error`; do NOT throw
+```
+Per-proposal apply path. The macOS app calls this when the user clicks
+"Approve & apply" on a single row. Worker should:
+- Look up the compostPile row by `Proposal ID = proposalId`.
+- Execute the action (`archive` / `merge` / `fix_link` / `add_tag` / `delete_stub`).
+- Stamp `Approved = true` and `Applied = true` on success.
+- Return `{ ok: false, error: "..." }` (HTTP 200, not thrown) on any failure
+  so the row can render the specific reason inline. The app surfaces
+  `error` verbatim — keep it short and human.
+
 ### `reviewDraft`
 ```typescript
 input:  { draftId: string, decision: "approve" | "reject" } // accepts row page id or Draft ID

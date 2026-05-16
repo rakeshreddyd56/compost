@@ -83,6 +83,10 @@
 
 ---
 
+## 📬 Inbox for Codex (worker side)
+
+- [ ] [workers] **Implement `applyProposal` tool** per INTERFACE.md (single-row apply by `Proposal ID`). The Claude app calls this from per-row "Approve & apply" buttons on `claude/s11-per-proposal-apply`. Until shipped, the app will surface the worker error inline on each row.
+
 ## 🔥 Current focus (post-S2, start S3)
 
 - [x] [workers] Add `applyProposal({ proposalId })` with safe-demo guard for per-row Notch apply
