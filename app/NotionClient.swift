@@ -102,7 +102,20 @@ final class NotionClient {
     func currentCueCard() async throws -> CueCard? {
         guard !ids.cueCards.isEmpty else { return nil }
         let pages = try await queryDatabase(ids.cueCards, filter: nil)
-        return pages.compactMap(CueCard.init).first
+        // Multiple cueCards rows may exist (one per Cue source page).
+        // Pick the most recently generated so the notch always reflects
+        // the freshest "right now" rather than whatever Notion returned first.
+        return pages
+            .compactMap(CueCard.init)
+            .sorted { lhs, rhs in
+                let lg = lhs.generatedAt ?? .distantPast
+                let rg = rhs.generatedAt ?? .distantPast
+                if lg != rg { return lg > rg }
+                let lc = lhs.currentTime ?? .distantPast
+                let rc = rhs.currentTime ?? .distantPast
+                return lc > rc
+            }
+            .first
     }
 
     // MARK: - Tool invocation

@@ -13,88 +13,14 @@ struct ExpandedView: View {
         VStack(spacing: GardenStyle.sectionGap) {
             header
 
-            if let err = manager.summary.lastError {
-                HStack(spacing: 6) {
-                    Image(systemName: "wifi.exclamationmark")
-                        .font(.caption2)
-                        .foregroundColor(.yellow)
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, GardenStyle.cardPadding)
-                .accessibilityLabel("Sync issue: \(err)")
-            }
+            topPip
 
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: GardenStyle.sectionGap) {
-                    if !manager.summary.hasAnything && manager.summary.currentCue == nil {
-                        emptyState
-                    } else {
-                        if let cue = manager.summary.currentCue {
-                            sectionLabel("☀️ Up next")
-                            CueRow(cue: cue, manager: manager)
-                                .staggered(index: 0, appeared: appeared)
-                        }
-
-                        if manager.summary.proposalCount > 0 {
-                            sectionLabel("🪴 Tidy")
-                            ForEach(Array(manager.summary.proposals.prefix(5).enumerated()), id: \.element.id) { idx, proposal in
-                                ProposalRow(proposal: proposal, manager: manager)
-                                    .staggered(index: idx + 1, appeared: appeared)
-                            }
-                            if manager.summary.proposalCount > 5 {
-                                Text("+ \(manager.summary.proposalCount - 5) more")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Button(action: { Task { await manager.applyApproved() } }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.seal.fill").font(.caption)
-                                    Text("Apply approved").font(.caption.weight(.semibold))
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .foregroundColor(.white)
-                                .background(GardenStyle.accentGreen)
-                                .cornerRadius(GardenStyle.cornerRadius)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Apply rows marked Approved in Notion")
-                            .accessibilityLabel("Apply approved proposals")
-                        }
-
-                        if manager.summary.draftCount > 0 {
-                            sectionLabel("🌙 Drafts on ice")
-                            ForEach(Array(manager.summary.drafts.prefix(3).enumerated()), id: \.element.id) { idx, draft in
-                                DraftRow(draft: draft, manager: manager)
-                                    .staggered(index: idx + 6, appeared: appeared)
-                            }
-                        }
-
-                        if manager.summary.digestReady, let url = manager.summary.digestUrl {
-                            sectionLabel("📰 Sunday digest")
-                            Button(action: { NSWorkspace.shared.open(url) }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "newspaper")
-                                    Text("Open this week's digest")
-                                        .font(.callout)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .foregroundColor(GardenStyle.accentGreen)
-                                .overlay(RoundedRectangle(cornerRadius: GardenStyle.cornerRadius).stroke(GardenStyle.accentGreen, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Open weekly digest in Notion")
-                        }
-                    }
-                }
-                .padding(.horizontal, GardenStyle.cardPadding)
-                .padding(.bottom, GardenStyle.cardPadding)
+                content
+                    .padding(.horizontal, GardenStyle.cardPadding)
+                    .padding(.bottom, GardenStyle.cardPadding)
             }
             .frame(maxHeight: 360)
         }
@@ -112,27 +38,156 @@ struct ExpandedView: View {
         }
     }
 
+    // MARK: - Top pip (success ✓, offline ⚠, or loading …)
+
+    @ViewBuilder
+    private var topPip: some View {
+        if let success = manager.lastSuccess {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(GardenStyle.accentGreen)
+                Text(successMessage(success))
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, GardenStyle.cardPadding)
+            .transition(.opacity)
+            .accessibilityLabel(successMessage(success))
+        } else if let err = manager.summary.lastError {
+            HStack(spacing: 6) {
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.caption2)
+                    .foregroundColor(.yellow)
+                Text(err)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, GardenStyle.cardPadding)
+            .accessibilityLabel("Sync issue: \(err)")
+        } else if !manager.hasLoadedOnce {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking your workspace…")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, GardenStyle.cardPadding)
+            .accessibilityLabel("Loading workspace state")
+        }
+    }
+
+    private func successMessage(_ ping: SuccessPing) -> String {
+        switch ping {
+        case .tidied:    return "Tidy run kicked off"
+        case .applied:   return "Approved proposals applied"
+        case .reviewed:  return "Draft reviewed"
+        }
+    }
+
+    // MARK: - Body sections
+
+    @ViewBuilder
+    private var content: some View {
+        if !manager.hasLoadedOnce {
+            loadingState
+        } else if !manager.summary.hasAnything && manager.summary.currentCue == nil {
+            emptyState
+        } else {
+            VStack(alignment: .leading, spacing: GardenStyle.sectionGap) {
+                if let cue = manager.summary.currentCue {
+                    sectionLabel("☀️ Up next")
+                    CueRow(cue: cue, manager: manager)
+                        .staggered(index: 0, appeared: appeared)
+                }
+
+                if manager.summary.proposalCount > 0 {
+                    sectionLabel("🪴 Tidy")
+                    ForEach(Array(manager.summary.proposals.prefix(5).enumerated()), id: \.element.id) { idx, proposal in
+                        ProposalRow(proposal: proposal, manager: manager)
+                            .staggered(index: idx + 1, appeared: appeared)
+                    }
+                    if manager.summary.proposalCount > 5 {
+                        Text("+ \(manager.summary.proposalCount - 5) more")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    applyButton
+                }
+
+                if manager.summary.draftCount > 0 {
+                    sectionLabel("🌙 Drafts on ice")
+                    ForEach(Array(manager.summary.drafts.prefix(3).enumerated()), id: \.element.id) { idx, draft in
+                        DraftRow(draft: draft, manager: manager)
+                            .staggered(index: idx + 6, appeared: appeared)
+                    }
+                }
+
+                if manager.summary.digestReady, let url = manager.summary.digestUrl {
+                    sectionLabel("📰 Sunday digest")
+                    Button(action: { NSWorkspace.shared.open(url) }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "newspaper")
+                            Text("Open this week's digest")
+                                .font(.callout)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundColor(GardenStyle.accentGreen)
+                        .overlay(RoundedRectangle(cornerRadius: GardenStyle.cornerRadius).stroke(GardenStyle.accentGreen, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open weekly digest in Notion")
+                }
+            }
+        }
+    }
+
+    // MARK: - States
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            Mascot(size: 56, mood: .calm)
+            ProgressView()
+                .controlSize(.small)
+            Text("Compost is checking on your workspace…")
+                .font(.callout)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading. Compost is checking your workspace.")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Mascot(size: 64, mood: .calm)
+            Text("Your workspace is calm.")
+                .font(.system(.callout, design: .rounded).weight(.semibold))
+            Text("Nothing to tidy. ✨")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Your workspace is calm. Nothing to tidy.")
+    }
+
+    // MARK: - Header
+
     private var header: some View {
-        HStack {
+        HStack(spacing: 10) {
+            Mascot(size: 22, mood: mascotMood)
             Text(greeting)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .foregroundColor(.primary)
             Spacer()
-            Button(action: { Task { await manager.tidyNow() } }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "wand.and.stars.inverse").font(.caption)
-                    Text("Tidy now").font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .foregroundColor(.white)
-                .background(GardenStyle.accentGreen)
-                .cornerRadius(GardenStyle.cornerRadius)
-            }
-            .buttonStyle(.plain)
-            .help("Trigger Gardener worker now")
-            .accessibilityLabel("Tidy now")
-
+            tidyButton
             Button(action: { Task { await manager.toggle() } }) {
                 Image(systemName: "xmark")
                     .font(.caption)
@@ -145,21 +200,56 @@ struct ExpandedView: View {
         .padding(.horizontal, GardenStyle.cardPadding)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "leaf.fill")
-                .font(.system(size: 28))
-                .foregroundColor(GardenStyle.accentGreen.opacity(0.7))
-            Text("Your workspace is calm.")
-                .font(.system(.callout, design: .rounded).weight(.semibold))
-            Text("✨")
-                .font(.title3)
+    private var tidyButton: some View {
+        let busy = manager.inflight.contains(.tidyNow)
+        return Button(action: { Task { await manager.tidyNow() } }) {
+            HStack(spacing: 4) {
+                if busy {
+                    ProgressView().controlSize(.small).tint(.white)
+                } else {
+                    Image(systemName: "wand.and.stars.inverse").font(.caption)
+                }
+                Text(busy ? "Tidying…" : "Tidy now").font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .foregroundColor(.white)
+            .background(GardenStyle.accentGreen)
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.85 : 1.0)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your workspace is calm. Nothing pending.")
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .help("Trigger Gardener worker now")
+        .accessibilityLabel(busy ? "Tidy in progress" : "Tidy now")
+        .accessibilityHint("Runs the Gardener worker to refresh proposals")
     }
+
+    private var applyButton: some View {
+        let busy = manager.inflight.contains(.applyApproved)
+        return Button(action: { Task { await manager.applyApproved() } }) {
+            HStack(spacing: 4) {
+                if busy {
+                    ProgressView().controlSize(.small).tint(.white)
+                } else {
+                    Image(systemName: "checkmark.seal.fill").font(.caption)
+                }
+                Text(busy ? "Applying…" : "Apply approved").font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .foregroundColor(.white)
+            .background(GardenStyle.accentGreen)
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.85 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .help("Apply rows marked Approved in Notion")
+        .accessibilityLabel(busy ? "Apply in progress" : "Apply approved proposals")
+    }
+
+    // MARK: - Helpers
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
@@ -176,6 +266,14 @@ struct ExpandedView: View {
         case 17..<22: return "Good evening"
         default:      return "Hello"
         }
+    }
+
+    private var mascotMood: Mascot.Mood {
+        if manager.summary.lastError != nil { return .calm }
+        let imminent = (manager.summary.currentCue?.minutesUntilNext ?? 0)
+        if imminent > 0 && imminent < 10 { return .alert }
+        if manager.summary.hasAnything { return .nudging }
+        return .calm
     }
 }
 

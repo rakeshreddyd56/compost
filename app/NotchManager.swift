@@ -17,10 +17,29 @@ enum NotchState: Equatable {
     case retracting
 }
 
+/// Identifies an in-flight worker action so the row showing the trigger can
+/// render a spinner / disabled state without other rows reacting.
+enum InflightAction: Hashable {
+    case tidyNow
+    case applyApproved
+    case reviewDraft(String)
+}
+
+/// One-shot success ping consumed by the view layer to flash a brief "✓ done"
+/// affordance after a worker tool call returns.
+enum SuccessPing: Equatable {
+    case tidied
+    case applied
+    case reviewed(String)
+}
+
 @MainActor
 final class NotchManager: ObservableObject {
     @Published private(set) var state: NotchState = .hidden
     @Published private(set) var summary: NotchSummary = .empty
+    @Published private(set) var hasLoadedOnce: Bool = false
+    @Published private(set) var inflight: Set<InflightAction> = []
+    @Published private(set) var lastSuccess: SuccessPing?
 
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
@@ -56,6 +75,7 @@ final class NotchManager: ObservableObject {
 
     private func applySummary(_ s: NotchSummary) async {
         summary = s
+        if s.lastError == nil { hasLoadedOnce = true }
         let total = s.proposalCount + s.draftCount + (s.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state { transition(to: .hidden) }
@@ -82,21 +102,39 @@ final class NotchManager: ObservableObject {
     }
 
     func tidyNow() async {
-        _ = try? await notion.invokeTool("tidyNow", input: [:])
-        await poller.forceRefresh()
+        await runAction(.tidyNow, success: .tidied) {
+            _ = try? await self.notion.invokeTool("tidyNow", input: [:])
+        }
     }
 
     func applyApproved() async {
-        _ = try? await notion.invokeTool("applyApproved", input: [:])
-        await poller.forceRefresh()
+        await runAction(.applyApproved, success: .applied) {
+            _ = try? await self.notion.invokeTool("applyApproved", input: [:])
+        }
     }
 
     func reviewDraft(draftId: String, approve: Bool) async {
-        _ = try? await notion.invokeTool("reviewDraft", input: [
-            "draftId": draftId,
-            "decision": approve ? "approve" : "reject",
-        ])
+        await runAction(.reviewDraft(draftId), success: .reviewed(draftId)) {
+            _ = try? await self.notion.invokeTool("reviewDraft", input: [
+                "draftId": draftId,
+                "decision": approve ? "approve" : "reject",
+            ])
+        }
+    }
+
+    /// Wrap a tool call with inflight tracking + a short success ping the UI
+    /// can flash to confirm the action landed. Always force-refreshes the
+    /// poller so the badge count catches up immediately.
+    private func runAction(_ action: InflightAction, success: SuccessPing, body: () async -> Void) async {
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+        await body()
+        lastSuccess = success
         await poller.forceRefresh()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            if self?.lastSuccess == success { self?.lastSuccess = nil }
+        }
     }
 
     private func expand() async {
