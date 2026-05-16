@@ -18,7 +18,7 @@ import { isLateNight, isMorningReviewWindow } from "./utils/time";
 
 class WebhookVerificationError extends Error {}
 
-export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any }) {
+export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: any }) {
 
   worker.webhook("onLateNightEdit", {
     title: "Late-night edit handler",
@@ -48,7 +48,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any }) {
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
       if (!FROZEN_DS) return { changes: [], hasMore: false };
 
-      const res = await withRetryOn429(() => context.notion.databases.query({
+      const res: any = await withRetryOn429(() => context.notion.databases.query({
         database_id: FROZEN_DS,
         filter: { property: "Status", select: { equals: "frozen" } },
       }));
@@ -70,7 +70,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any }) {
       if (!FROZEN_DS) return { changes: [], hasMore: false };
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-      const res = await withRetryOn429(() => context.notion.databases.query({
+      const res: any = await withRetryOn429(() => context.notion.databases.query({
         database_id: FROZEN_DS,
         filter: {
           and: [
@@ -221,7 +221,7 @@ async function hasActiveDraft(notion: any, pageId: string): Promise<boolean> {
 }
 
 async function fetchDraftRow(notion: any, dataSourceId: string, draftId: string): Promise<any | null> {
-  const res = await notion.databases.query({
+  const res: any = await notion.databases.query({
     database_id: dataSourceId,
     filter: { property: "Draft ID", rich_text: { equals: draftId } },
   });

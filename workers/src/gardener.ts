@@ -20,7 +20,7 @@ import {
 
 const WORKSPACE_CAP = 500;
 
-export function registerGardener(worker: any, dbs: { compostPile: any; embeddingsCache: any }) {
+export function registerGardener(worker: any, dbs: { compostPile: any; embeddingsCache: any; pacer: any }) {
 
   worker.sync("gardener", {
     database: dbs.compostPile,
@@ -57,7 +57,7 @@ async function walkWorkspace(notion: any): Promise<any[]> {
   let cursor: string | undefined = undefined;
 
   while (pages.length < WORKSPACE_CAP) {
-    const res = await withRetryOn429(() => notion.search({
+    const res: any = await withRetryOn429(() => notion.search({
       filter: { property: "object", value: "page" },
       page_size: 100,
       start_cursor: cursor,
@@ -80,7 +80,7 @@ async function walkWorkspace(notion: any): Promise<any[]> {
 
 async function fetchFirstBlocks(notion: any, pageId: string, limit: number): Promise<any[]> {
   try {
-    const res = await withRetryOn429(() =>
+    const res: any = await withRetryOn429(() =>
       notion.blocks.children.list({ block_id: pageId, page_size: limit })
     );
     return res.results;
@@ -154,7 +154,7 @@ export async function applyApproved(notion: any): Promise<any[]> {
   const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
   if (!COMPOST_PILE_DATA_SOURCE_ID) return [];
 
-  const res = await withRetryOn429(() =>
+  const res: any = await withRetryOn429(() =>
     notion.databases.query({
       database_id: COMPOST_PILE_DATA_SOURCE_ID,
       filter: {

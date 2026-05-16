@@ -24,7 +24,7 @@ interface Moment {
 
 const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\b/i;
 
-export function registerCue(worker: any, dbs: { cueCards: any }) {
+export function registerCue(worker: any, dbs: { cueCards: any; pacer: any }) {
 
   worker.sync("cue", {
     database: dbs.cueCards,
@@ -56,7 +56,7 @@ async function findCueSources(notion: any): Promise<any[]> {
   const out: any[] = [];
   let cursor: string | undefined = undefined;
   while (true) {
-    const res = await withRetryOn429(() => notion.search({
+    const res: any = await withRetryOn429(() => notion.search({
       filter: { property: "object", value: "page" },
       page_size: 100,
       start_cursor: cursor,
@@ -82,7 +82,7 @@ function isCueSource(page: any): boolean {
 // ---------------- Phase 2: parse timeline ----------------
 
 async function parseTimeline(notion: any, page: any): Promise<Moment[]> {
-  const res = await notion.blocks.children.list({ block_id: page.id, page_size: 100 });
+  const res: any = await notion.blocks.children.list({ block_id: page.id, page_size: 100 });
   const moments: Moment[] = [];
 
   let currentHeading = "";

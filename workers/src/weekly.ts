@@ -68,7 +68,7 @@ async function captureWorkspaceState(notion: any): Promise<Map<string, PageState
   let count = 0;
 
   while (count < WORKSPACE_CAP) {
-    const res = await withRetryOn429(() => notion.search({
+    const res: any = await withRetryOn429(() => notion.search({
       filter: { property: "object", value: "page" },
       page_size: 100,
       start_cursor: cursor,
@@ -102,7 +102,7 @@ async function loadSnapshots(notion: any): Promise<Map<string, PageState>> {
 
   let cursor: string | undefined = undefined;
   while (true) {
-    const res = await withRetryOn429(() => notion.databases.query({
+    const res: any = await withRetryOn429(() => notion.databases.query({
       database_id: SNAPSHOTS_DS,
       page_size: 100,
       start_cursor: cursor,
