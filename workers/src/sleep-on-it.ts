@@ -27,6 +27,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     description: "Receives Notion page.content_updated events; freezes late-night drafts for morning review.",
     execute: async (events: any[], context: any) => {
       // Allow verification handshake even before COMPOST_NOTION_TOKEN is set
+      let processed = 0;
       for (const event of events) {
         if (event.body?.verification_token) {
           // The human MUST run `ntn workers env set COMPOST_WEBHOOK_SECRET=<token>` next
@@ -36,7 +37,9 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
         if (!notionTokenReady()) { warnMissingToken("onLateNightEdit"); continue; }
         verifySignature(event);
         await handleEdit(event, notionClient(context));
+        processed += 1;
       }
+      return { ok: true, processed };
     },
   });
 
@@ -47,11 +50,15 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("sleepOnItReviewer"); return emptySync(); }
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
-      if (!isMorningReviewWindow(tz)) return { changes: [], hasMore: false };
       const notion = notionClient(context);
+      const demoChanges = process.env.SLEEP_ON_IT_FORCE_FIRE === "true"
+        ? await demoFrozenDraftChanges(notion)
+        : [];
+
+      if (!isMorningReviewWindow(tz)) return { changes: demoChanges, hasMore: false };
 
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
-      if (!FROZEN_DS) return { changes: [], hasMore: false };
+      if (!FROZEN_DS) return { changes: demoChanges, hasMore: false };
 
       let res: any;
       try {
@@ -60,7 +67,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
           filter: { property: "Status", select: { equals: "frozen" } },
         }));
       } catch (e: any) {
-        if (isNotionObjectNotFound(e)) return { changes: [], hasMore: false };
+        if (isNotionObjectNotFound(e)) return { changes: demoChanges, hasMore: false };
         throw e;
       }
       const changes = res.results.map((row: any) => ({
@@ -68,7 +75,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
         key: readText(row, "Draft ID"),
         properties: { Status: Builder.select("ready") },
       }));
-      return { changes, hasMore: false };
+      return { changes: [...demoChanges, ...changes], hasMore: false };
     },
   });
 
@@ -146,8 +153,9 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
 function verifySignature(event: any) {
   const secret = process.env.COMPOST_WEBHOOK_SECRET || process.env.NOTION_WEBHOOK_SECRET;
   if (!secret) throw new WebhookVerificationError("COMPOST_WEBHOOK_SECRET not set");
-  const headerVal = event.headers?.["x-notion-signature"] ?? "";
-  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(event.rawBody).digest("hex");
+  const headerVal = event.headers?.["x-notion-signature"] ?? event.headers?.["X-Notion-Signature"] ?? "";
+  const rawBody = event.rawBody ?? JSON.stringify(event.body ?? {});
+  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
   const a = Buffer.from(headerVal);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
@@ -194,6 +202,8 @@ async function handleEdit(event: any, notion: any) {
 }
 
 async function calmRewrite(markdown: string, title: string): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) return fallbackRewrite(markdown);
+
   const prompt = `You are a calm morning editor. Below is something I wrote late at night. Rewrite it preserving every fact, name, and structural section — but soften the tone for a calmer audience.
 
 Rules:
@@ -210,37 +220,101 @@ Title: ${title}
 Original:
 ${markdown}`;
 
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: Math.min(4096, markdown.length * 2),
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${await r.text()}`);
-  const json: any = await r.json();
-  return json.content?.[0]?.text ?? "";
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: Math.min(4096, markdown.length * 2),
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!r.ok) return fallbackRewrite(markdown);
+    const json: any = await r.json();
+    return json.content?.[0]?.text?.trim() || fallbackRewrite(markdown);
+  } catch {
+    return fallbackRewrite(markdown);
+  }
+}
+
+function fallbackRewrite(markdown: string): string {
+  return markdown
+    .replace(/\bI AM ABSOLUTELY CERTAIN\b/gi, "I am concerned")
+    .replace(/\bEVERYONE\b/g, "the team")
+    .replace(/\bIMMEDIATELY\b/g, "soon")
+    .replace(/\bALWAYS\b/g, "often")
+    .replace(/\bNEVER\b/g, "rarely");
 }
 
 // ---------------- DB helpers (skeletons — flesh out using @notionhq/client patterns) ----------------
 
 async function upsertFrozenDraftRow(notion: any, fields: any) {
-  // TODO: implement using FROZEN_DRAFTS_DATA_SOURCE_ID and pages.create / pages.update
-  // Look up by Draft ID first; create if missing, update if exists.
+  if (process.env.SLEEP_ON_IT_FORCE_FIRE === "true") return;
+
+  const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
+  if (!FROZEN_DS) return;
+
+  const existing = fields.draftId ? await fetchDraftRow(notion, FROZEN_DS, fields.draftId) : null;
+  const properties = frozenDraftProperties(fields);
+  if (Object.keys(properties).length === 0) return;
+
+  try {
+    if (existing) {
+      await notion.pages.update({ page_id: existing.id, properties });
+      return;
+    }
+
+    await notion.pages.create({
+      parent: { data_source_id: FROZEN_DS },
+      properties,
+    });
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) {
+      console.warn("upsertFrozenDraftRow skipped: Frozen Drafts data source is not shared with the integration");
+      return;
+    }
+    throw e;
+  }
 }
 
 async function hasActiveDraft(notion: any, pageId: string): Promise<boolean> {
-  // TODO: query frozenDrafts where Source Page ID = pageId AND Status in (pending, frozen, ready)
-  return false;
+  if (process.env.SLEEP_ON_IT_FORCE_FIRE === "true") return false;
+
+  const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
+  if (!FROZEN_DS) return false;
+  let res: any;
+  try {
+    res = await notion.dataSources.query({
+      data_source_id: FROZEN_DS,
+      filter: {
+        and: [
+          { property: "Source Page ID", rich_text: { equals: pageId } },
+          {
+            or: [
+              { property: "Status", select: { equals: "pending" } },
+              { property: "Status", select: { equals: "frozen" } },
+              { property: "Status", select: { equals: "ready" } },
+            ],
+          },
+        ],
+      },
+    });
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) return false;
+    throw e;
+  }
+  return res.results.length > 0;
 }
 
 async function fetchDraftRow(notion: any, dataSourceId: string, draftId: string): Promise<any | null> {
+  const page = await retrieveDraftPage(notion, draftId);
+  if (page) return page;
+
   let res: any;
   try {
     res = await notion.dataSources.query({
@@ -252,6 +326,18 @@ async function fetchDraftRow(notion: any, dataSourceId: string, draftId: string)
     throw e;
   }
   return res.results[0] ?? null;
+}
+
+async function retrieveDraftPage(notion: any, pageId: string): Promise<any | null> {
+  if (!/^[0-9a-f]{32}$|^[0-9a-f-]{36}$/i.test(pageId)) return null;
+
+  try {
+    const page = await notion.pages.retrieve({ page_id: pageId });
+    if (page?.properties?.["Draft ID"]) return page;
+  } catch (e: any) {
+    if (!isNotionObjectNotFound(e) && e?.code !== "validation_error") throw e;
+  }
+  return null;
 }
 
 function isNotionObjectNotFound(e: any): boolean {
@@ -336,10 +422,100 @@ function pageTitle(page: any): string {
   return "Untitled";
 }
 
+async function demoFrozenDraftChanges(notion: any): Promise<any[]> {
+  const sources = await findSleepDemoSources(notion);
+  const changes: any[] = [];
+  for (const page of sources) {
+    const blocks = await notion.blocks.children.list({ block_id: page.id, page_size: 50 });
+    const original = blocksToMarkdown(blocks.results);
+    if (wordCount(original) < 30) continue;
+    const title = pageTitle(page);
+    const draftId = sha1(`${page.id}|${new Date().toISOString().slice(0, 10)}`);
+    const rewrite = await calmRewrite(original, title);
+    changes.push({
+      type: "upsert" as const,
+      key: draftId,
+      properties: {
+        Title: Builder.title(title),
+        "Draft ID": Builder.richText(draftId),
+        "Source Page ID": Builder.richText(page.id),
+        "Original Snapshot": Builder.richText(original),
+        Original: Builder.richText(original),
+        Rewrite: Builder.richText(rewrite),
+        Status: Builder.select("frozen"),
+        "Frozen At": Builder.dateTime(new Date().toISOString()),
+      },
+    });
+    await pace();
+  }
+  return changes;
+}
+
+async function findSleepDemoSources(notion: any): Promise<any[]> {
+  const out: any[] = [];
+  let cursor: string | undefined = undefined;
+  while (out.length < 10) {
+    const res: any = await withRetryOn429(() => notion.search({
+      filter: { property: "object", value: "page" },
+      page_size: 100,
+      start_cursor: cursor,
+    }));
+    for (const page of res.results) {
+      if (isSleepDemoSource(page)) out.push(page);
+    }
+    if (!res.has_more) break;
+    cursor = res.next_cursor;
+    await pace();
+  }
+  return out;
+}
+
+function isSleepDemoSource(page: any): boolean {
+  return /\[!sleep\]|demo late-night draft/i.test(pageTitle(page));
+}
+
 function readText(row: any, key: string): string {
   const p = row.properties?.[key];
   if (!p) return "";
   if (p.type === "rich_text") return (p.rich_text ?? []).map((t: any) => t.plain_text).join("");
   if (p.type === "title")     return (p.title ?? []).map((t: any) => t.plain_text).join("");
   return "";
+}
+
+function frozenDraftProperties(fields: any): Record<string, any> {
+  const properties: Record<string, any> = {};
+  if (fields.title != null) properties.Title = titleProp(fields.title);
+  if (fields.draftId != null) properties["Draft ID"] = richTextProp(fields.draftId);
+  if (fields.pageId != null) properties["Source Page ID"] = richTextProp(fields.pageId);
+  if (fields.original != null) {
+    properties["Original Snapshot"] = richTextProp(fields.original);
+    properties.Original = richTextProp(fields.original);
+  }
+  if (fields.rewrite != null) properties.Rewrite = richTextProp(fields.rewrite);
+  if (fields.status != null) properties.Status = { select: { name: fields.status } };
+  if (fields.frozenAt != null) properties["Frozen At"] = { date: { start: fields.frozenAt } };
+  if (fields.error != null) properties.Error = richTextProp(fields.error);
+  return properties;
+}
+
+function titleProp(text: string) {
+  return {
+    title: [{ type: "text", text: { content: String(text).slice(0, 1800) || "Untitled" } }],
+  };
+}
+
+function richTextProp(text: string) {
+  return {
+    rich_text: chunkText(String(text)).map((content) => ({
+      type: "text",
+      text: { content },
+    })),
+  };
+}
+
+function chunkText(text: string, size = 1800): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
 }

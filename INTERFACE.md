@@ -22,12 +22,14 @@
 | Property | Type | Notes |
 |---|---|---|
 | `Title` | title | Original page title |
+| `Draft ID` | rich_text | Stable sha1(page + date) id for idempotency |
 | `Source Page ID` | rich_text | Notion page that was edited late |
 | `Original Snapshot` | rich_text | Markdown of original content |
 | `Rewrite` | rich_text | Markdown of calmer rewrite |
-| `Status` | select | `frozen` \| `approved` \| `rejected` \| `expired` |
+| `Status` | select | `pending` \| `frozen` \| `ready` \| `approved` \| `rejected` \| `error` \| `expired` |
 | `Frozen At` | date | When edit happened |
 | `Reviewed At` | date | When user decided |
+| `Error` | rich_text | Last processing/review error, if any |
 
 ### `weeklyDigests` — Weekly archive (STRETCH)
 | Property | Type | Notes |
@@ -57,20 +59,20 @@
 
 ### `tidyNow`
 ```typescript
-input:  { scope?: string }  // optional database id; default = all
-output: { proposalsCreated: number, dashboardUrl: string }
+input:  {}
+output: { applied: number, errors: number }
 ```
 
 ### `applyApproved`
 ```typescript
 input:  {}
-output: { applied: number, errors: string[] }
+output: { applied: number, errors: number }
 ```
 
 ### `reviewDraft`
 ```typescript
-input:  { draftId: string, decision: "approve" | "reject" }
-output: { ok: boolean }
+input:  { draftId: string, decision: "approve" | "reject" } // accepts row page id or Draft ID
+output: { ok: boolean, error: string | null }
 ```
 
 ## Worker webhooks
