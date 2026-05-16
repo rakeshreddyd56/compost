@@ -3,24 +3,39 @@
  */
 
 import { j } from "@notionhq/workers/schema-builder";
-import { applyApproved } from "./gardener";
+import { applyApproved as applyApprovedRows } from "./gardener";
 import { notionClient } from "./utils/notion-auth";
 
 export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts: any }) {
+  const applySchema = j.object({
+    applied: j.number(),
+    errors: j.number(),
+  });
+
+  const runApplyApproved = async (context: any) => {
+    const changes = await applyApprovedRows(notionClient(context));
+    const applied = changes.filter((c) => c.applied).length;
+    const errors = changes.filter((c) => !c.applied).length;
+    return { applied, errors };
+  };
 
   worker.tool("tidyNow", {
     title: "Tidy now",
     description: "Apply approved Gardener proposals from the Compost Pile immediately.",
     schema: j.object({}),
-    outputSchema: j.object({
-      applied: j.number(),
-      errors: j.number(),
-    }),
+    outputSchema: applySchema,
     execute: async (_input: any, context: any) => {
-      const changes = await applyApproved(notionClient(context));
-      const applied = changes.filter((c: any) => c?.properties?.Applied).length;
-      const errors  = changes.filter((c: any) => c?.properties?.Error).length;
-      return { applied, errors };
+      return runApplyApproved(context);
+    },
+  });
+
+  worker.tool("applyApproved", {
+    title: "Apply approved",
+    description: "Apply approved Gardener proposals and stamp the Compost Pile rows.",
+    schema: j.object({}),
+    outputSchema: applySchema,
+    execute: async (_input: any, context: any) => {
+      return runApplyApproved(context);
     },
   });
 
