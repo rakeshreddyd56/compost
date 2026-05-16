@@ -30,7 +30,7 @@
 - [ ] [workers] LLM rewrite with calm-tone prompt
 - [ ] [workers] Write to `frozenDrafts` DB per INTERFACE.md
 - [ ] [shared] Configure Notion-side automation: page.updated → POST webhook
-- [ ] [app] "Drafts on ice" panel in notch expanded state
+- [x] [app] "Drafts on ice" panel in notch expanded state (with side-by-side review)
 
 ## Block E — Sat 6:30-8p (Integration + dry-run)
 - [ ] [shared] End-to-end test: messy workspace → tidy → approve → apply → cleaner workspace
@@ -41,21 +41,23 @@
 - [ ] [workers] Declare cueCards managed DB (already in scaffold's index.ts)
 - [ ] [workers] Implement cue.ts: findCueSources, parseTimeline, pickCurrentAndNext, calmRephrase, buildCardChange
 - [ ] [workers] Deploy and test against the actual Hacker Resources doc with [!cue] in title
-- [ ] [app] Models/CueCard.swift + Views/CueRow.swift
-- [ ] [app] CompostPoller fetches latest cueCards row
-- [ ] [app] ExpandedView shows ☀️ Up Next section at top
-- [ ] [app] WakeTrigger via NSWorkspace.didWakeNotification → greet with current cue
-- [ ] [app] HotkeyManager ⌘⇧C global monitor
+- [x] [app] Models/CueCard.swift + Views/CueRow.swift
+- [x] [app] CompostPoller fetches latest cueCards row
+- [x] [app] ExpandedView shows ☀️ Up Next section at top
+- [x] [app] WakeTrigger via NSWorkspace.didWakeNotification → greet with current cue
+- [x] [app] HotkeyManager ⌘⇧C global monitor (with AXIsProcessTrusted check)
 
 ## Sprint S8 — Sat 10-11:30p home (polish OR stretch)
-- [ ] [app] Spring animations + GardenStyle polish (default)
+- [x] [app] Spring animations + GardenStyle polish (sage #4F7942, spring tokens, stagger)
 - [ ] [workers] Embedding dedup (alternative)
 - [ ] [workers] The Weekly stretch (only if everything rock solid)
 
 ## Block G — Sun 9-10:30a (Polish + edge cases)
 - [ ] [shared] Re-seed demo workspace
 - [ ] [workers] Error handling: Notion API rate limits, missing properties
-- [ ] [app] Pre-notch Mac fallback to menubar
+- [x] [app] Pre-notch Mac fallback to menubar (via DynamicNotchKit floating window)
+- [x] [app] 429 rate-limit retry with Retry-After honored
+- [x] [app] Offline indicator (yellow pip in peek + banner in expanded)
 - [ ] [shared] Second dry-run pitch
 
 ## Block H — Sun 10:30-11:30a (Demo + rehearsal)

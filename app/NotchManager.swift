@@ -130,7 +130,8 @@ struct ContentRouter: View {
         case .peek(let badge):
             PeekView(
                 badge: badge,
-                imminentCue: (manager.summary.currentCue?.minutesUntilNext ?? 999) < 10
+                imminentCue: (manager.summary.currentCue?.minutesUntilNext ?? 999) < 10,
+                offline: manager.summary.lastError != nil
             )
         case .expanding, .expanded:
             ExpandedView(manager: manager)

@@ -13,6 +13,20 @@ struct ExpandedView: View {
         VStack(spacing: GardenStyle.sectionGap) {
             header
 
+            if let err = manager.summary.lastError {
+                HStack(spacing: 6) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.caption2)
+                        .foregroundColor(.yellow)
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, GardenStyle.cardPadding)
+                .accessibilityLabel("Sync issue: \(err)")
+            }
+
             Divider()
 
             ScrollView {

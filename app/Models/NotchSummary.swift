@@ -13,6 +13,7 @@ struct NotchSummary {
     let digestReady: Bool
     let digestUrl: URL?
     let currentCue: CueCard?
+    let lastError: String?  // non-nil means most recent poll failed
 
     var hasAnything: Bool {
         proposalCount + draftCount + (digestReady ? 1 : 0) > 0
@@ -22,7 +23,7 @@ struct NotchSummary {
         proposalCount: 0, proposals: [],
         draftCount: 0, drafts: [],
         digestReady: false, digestUrl: nil,
-        currentCue: nil
+        currentCue: nil, lastError: nil
     )
 }
 

@@ -52,13 +52,27 @@ final class NotionClient {
         } else {
             req.httpBody = "{}".data(using: .utf8)
         }
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await sendWithRetry(req)
         guard let http = resp as? HTTPURLResponse else { throw NotionError.httpStatus(-1, "no response") }
         guard http.statusCode == 200 else {
             throw NotionError.httpStatus(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         let decoded = try JSONDecoder().decode(NotionQueryResponse.self, from: data)
         return decoded.results
+    }
+
+    /// One-shot retry on HTTP 429 (Notion rate limit) honoring Retry-After.
+    /// Notion limit is ~3 rps avg per workflows/notch-app.md; the poller paces
+    /// itself at 60s but bursts can still trip when multiple syncs run.
+    private func sendWithRetry(_ req: URLRequest) async throws -> (Data, URLResponse) {
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 429 else {
+            return (data, resp)
+        }
+        let retryAfter = (http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)) ?? 1.0
+        let nanos = UInt64(min(retryAfter, 5.0) * 1_000_000_000)
+        try await Task.sleep(nanoseconds: nanos)
+        return try await session.data(for: req)
     }
 
     func fetchProposals() async throws -> [Proposal] {

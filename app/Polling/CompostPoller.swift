@@ -33,11 +33,20 @@ final class CompostPoller {
                         drafts: drafts,
                         digestReady: digest != nil,
                         digestUrl: digest?.url,
-                        currentCue: cue
+                        currentCue: cue,
+                        lastError: nil
                     )
                     await callback(summary)
                 } catch {
                     print("Polling error: \(error)")
+                    let summary = NotchSummary(
+                        proposalCount: 0, proposals: [],
+                        draftCount: 0, drafts: [],
+                        digestReady: false, digestUrl: nil,
+                        currentCue: nil,
+                        lastError: describe(error)
+                    )
+                    await callback(summary)
                 }
 
                 if forceRefreshFlag {
@@ -47,6 +56,24 @@ final class CompostPoller {
                 }
             }
         }
+    }
+
+    private func describe(_ error: Error) -> String {
+        if let ne = error as? NotionError {
+            switch ne {
+            case .httpStatus(let code, _):
+                switch code {
+                case 401:        return "Token invalid — reconnect"
+                case 403:        return "No access to this database"
+                case 404:        return "Database not found"
+                case 429:        return "Rate-limited — retrying"
+                case 500...599:  return "Notion is having a moment"
+                default:         return "HTTP \(code)"
+                }
+            case .decoding:    return "Couldn't read Notion response"
+            }
+        }
+        return "Offline"
     }
 
     func forceRefresh() {
