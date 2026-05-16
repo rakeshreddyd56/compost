@@ -78,3 +78,20 @@
 | Time | Block | Decision | Reason |
 |---|---|---|---|
 | | | | |
+
+---
+
+## 🔥 Current focus (post-S1, pre-S2)
+
+**Codex 5.5 — start here in S2:**
+1. Open `.agents/skills/sync-guide/SKILL.md` — it auto-loads but read it explicitly
+2. Update each `registerX(worker, { ..., pacer })` function signature to type and use the pacer
+3. Inside every `execute()` that calls `context.notion.*`, do `await pacer.wait()` first
+4. Type the awaited responses (the 17 `'res' is of type unknown'` errors) — use `as any` initially if SDK types are obscure, then refine
+5. `npm run check` should be green before considering S2 done
+
+**Verify environment first:**
+- `ntn doctor` — should be 5/5 once Workers enabled
+- `cat .env` — every key filled in (NOTION_API_TOKEN, ANTHROPIC, OPENAI, MINIMAX, USER_TIMEZONE, NOTION_PARENT_PAGE_ID)
+- `ntn workers env push` — pushes .env to deployed worker
+- `ntn workers exec ping --remote -d '{}'` — sanity (should return ts)

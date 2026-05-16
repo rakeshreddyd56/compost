@@ -93,7 +93,7 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any }) {
     description: "Approve (write rewrite to source page) or reject (discard, source page unchanged).",
     schema: j.object({
       draftId: j.string().describe("Draft ID from frozenDrafts"),
-      decision: j.enum(["approve", "reject"]),
+      decision: j.enum("approve", "reject"),
     }),
     outputSchema: j.object({ ok: j.boolean(), error: j.string().nullable() }),
     execute: async ({ draftId, decision }: any, context: any) => {
