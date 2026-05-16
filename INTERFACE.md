@@ -16,6 +16,7 @@
 | `Reason` | rich_text | "94 days untouched, no inbound links" |
 | `Approved` | checkbox | User toggles |
 | `Applied` | checkbox | Worker stamps after execution |
+| `Error` | rich_text | Last apply failure, if any |
 | `Created` | created_time | auto |
 
 ### `frozenDrafts` — Sleep-On-It holds
@@ -60,14 +61,39 @@
 ### `tidyNow`
 ```typescript
 input:  {}
-output: { applied: number, errors: number }
+output: { proposed: number, upserted: number, errors: number }
 ```
+Refreshes Gardener proposals in `compostPile`. It does **not** apply or mutate
+target pages.
 
 ### `applyApproved`
 ```typescript
 input:  {}
 output: { applied: number, errors: number }
 ```
+Legacy batch path. Uses the same safe-demo guard as `applyProposal`.
+
+### `applyProposal`
+```typescript
+input:  { proposalId: string } // stable `Proposal ID` rich_text from compostPile
+output: {
+  ok: boolean,
+  proposalId: string,
+  action: string | null,
+  targetPageId: string | null,
+  applied: boolean,
+  error: string | null
+}
+```
+Per-proposal apply path. The macOS app calls this when the user clicks
+`Approve & apply` on a single row. Worker behavior:
+- Look up the `compostPile` row by `Proposal ID = proposalId`.
+- Refuse to mutate any target page that is not explicitly marked safe for demo
+  with `[!compost]`, `[!gardener]`, or `[!stale]` in the title/body.
+- Execute the action and stamp `Approved = true`, `Applied = true`, clear
+  `Error` on success.
+- Return `{ ok: false, error: "..." }` on failure instead of throwing so the
+  row can show the exact reason inline.
 
 ### `reviewDraft`
 ```typescript

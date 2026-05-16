@@ -85,6 +85,9 @@
 
 ## 🔥 Current focus (post-S2, start S3)
 
+- [x] [workers] Add `applyProposal({ proposalId })` with safe-demo guard for per-row Notch apply
+- [x] [workers] Change `tidyNow` to refresh proposals instead of applying approved rows
+
 **Claude Code — S3 priorities:**
 1. ✅ S2 COMPLETE: Notch app shell buildable and all models aligned with INTERFACE.md
 2. S3 focus: Robustness and pre-S7 setup
