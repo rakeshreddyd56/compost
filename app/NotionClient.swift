@@ -121,18 +121,34 @@ final class NotionClient {
             if let http = resp as? HTTPURLResponse, http.statusCode == 200 { return data }
         } catch { /* fall through */ }
 
-        // (B): shell-out fallback
+        // (B): shell-out fallback to `ntn workers exec`.
+        // `ntn` reads workers.json from the current working directory to find
+        // the worker ID — without cwd it fails with "No worker ID found" when
+        // the app is launched from the .app bundle. Resolve workers dir from
+        // env override first, then the canonical ~/compost/workers path.
         let json = try JSONSerialization.data(withJSONObject: input)
         let jsonString = String(data: json, encoding: .utf8) ?? "{}"
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/local/bin/ntn")
         task.arguments = ["workers", "exec", toolName, "--remote", "-d", jsonString]
+        task.currentDirectoryURL = Self.workersDirectoryURL()
+
         let pipe = Pipe()
         task.standardOutput = pipe
+        task.standardError = pipe
         try task.run()
         task.waitUntilExit()
         return pipe.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    private static func workersDirectoryURL() -> URL {
+        if let override = ProcessInfo.processInfo.environment["COMPOST_WORKERS_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent("compost/workers")
     }
 }
 
@@ -158,6 +174,7 @@ struct NotionProperty: Decodable {
     let `select`: NotionSelect?
     let checkbox: Bool?
     let date: NotionDate?
+    let number: Double?
 }
 
 struct NotionText: Decodable {
@@ -178,6 +195,7 @@ extension NotionProperty {
         if let t = title { return t.map { $0.plain_text }.joined() }
         if let s = `select` { return s.name }
         if let c = checkbox { return c ? "true" : "false" }
+        if let n = number { return String(n) }
         return ""
     }
 }

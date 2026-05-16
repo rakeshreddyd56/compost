@@ -102,8 +102,14 @@ struct CueCard: Identifiable {
         self.currentBullets = page.properties["Current Bullets"]?.plainText ?? ""
         self.nextHeading = page.properties["Next Heading"]?.plainText ?? ""
         self.nextBullets = page.properties["Next Bullets"]?.plainText ?? ""
-        let minutesStr = page.properties["Minutes Until Next"]?.plainText ?? "0"
-        self.minutesUntilNext = Int(minutesStr) ?? 0
+        // Notion number property — must read .number, not .plainText (which
+        // would always return "" and thus default to 0, making every cue
+        // look imminent).
+        if let n = page.properties["Minutes Until Next"]?.number {
+            self.minutesUntilNext = Int(n)
+        } else {
+            self.minutesUntilNext = 0
+        }
         self.calmCue = page.properties["Calm Cue"]?.plainText ?? ""
     }
 }

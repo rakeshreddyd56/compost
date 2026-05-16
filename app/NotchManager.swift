@@ -130,7 +130,12 @@ struct ContentRouter: View {
         case .peek(let badge):
             PeekView(
                 badge: badge,
-                imminentCue: (manager.summary.currentCue?.minutesUntilNext ?? 999) < 10,
+                // imminent only when we have a real positive countdown <10m;
+                // 0/missing means the row had no Minutes Until Next value
+                imminentCue: {
+                    let m = manager.summary.currentCue?.minutesUntilNext ?? 0
+                    return m > 0 && m < 10
+                }(),
                 offline: manager.summary.lastError != nil
             )
         case .expanding, .expanded:
