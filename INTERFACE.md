@@ -78,7 +78,7 @@ output: { ok: boolean }
 ### `onLateNightEdit`
 - URL: published via `ntn workers webhooks list`, format: `https://www.notion.so/webhooks/worker/{spaceId}/{workerId}/{uniqueWebhookId}/onLateNightEdit`
 - Triggered by: **Notion's native webhook subscription** on `page.content_updated` event (registered in UI at `developers.notion.com` → Connection settings → Webhooks tab)
-- First POST contains `verification_token` — Worker echoes back to complete handshake; token stored as `NOTION_WEBHOOK_SECRET` env var
+- First POST contains `verification_token` — Worker echoes back to complete handshake; token stored as `COMPOST_WEBHOOK_SECRET` env var
 - Subsequent POSTs include `X-Notion-Signature: sha256=<hmac>` — verify HMAC-SHA256(rawBody, secret) with `crypto.timingSafeEqual`
 - Body: standard Notion webhook payload (page ID, event type, timestamp)
 
@@ -86,11 +86,12 @@ output: { ok: boolean }
 
 | Name | Where set | Used by |
 |---|---|---|
+| `COMPOST_NOTION_TOKEN` | Workers env | workers (Notion API client for syncs/webhooks) |
 | `OPENAI_API_KEY` | Workers env (`ntn workers env set`) | workers (embeddings) |
 | `ANTHROPIC_API_KEY` | Workers env | workers (LLM rewrites) |
-| `NOTION_PARENT_PAGE_ID` | Workers env | workers (where Compost Dashboard lives) |
+| `COMPOST_PARENT_PAGE_ID` | Workers env | workers (where Compost Dashboard lives) |
 | `USER_TIMEZONE` | Workers env | workers (Sleep-On-It gate) |
-| `NOTION_WEBHOOK_SECRET` | Workers env (set after first verification POST) | workers (Sleep-On-It HMAC verify) |
+| `COMPOST_WEBHOOK_SECRET` | Workers env (set after first verification POST) | workers (Sleep-On-It HMAC verify) |
 | `NOTION_INTEGRATION_TOKEN` | App keychain (v1 internal integration shortcut) | app (Notion API) |
 
 ## App ↔ Workers communication

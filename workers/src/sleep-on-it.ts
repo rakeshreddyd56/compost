@@ -16,6 +16,7 @@ import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 import { isLateNight, isMorningReviewWindow } from "./utils/time";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
+import { notionClient } from "./utils/notion-auth";
 
 class WebhookVerificationError extends Error {}
 
@@ -25,16 +26,16 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     title: "Late-night edit handler",
     description: "Receives Notion page.content_updated events; freezes late-night drafts for morning review.",
     execute: async (events: any[], context: any) => {
-      // Allow verification handshake even before NOTION_API_TOKEN is set
+      // Allow verification handshake even before COMPOST_NOTION_TOKEN is set
       for (const event of events) {
         if (event.body?.verification_token) {
-          // The human MUST run `ntn workers env set NOTION_WEBHOOK_SECRET=<token>` next
-          console.log("VERIFICATION TOKEN — set as NOTION_WEBHOOK_SECRET:", event.body.verification_token);
+          // The human MUST run `ntn workers env set COMPOST_WEBHOOK_SECRET=<token>` next
+          console.log("VERIFICATION TOKEN — set as COMPOST_WEBHOOK_SECRET:", event.body.verification_token);
           return { challenge: event.body.verification_token };
         }
         if (!notionTokenReady()) { warnMissingToken("onLateNightEdit"); continue; }
         verifySignature(event);
-        await handleEdit(event, context);
+        await handleEdit(event, notionClient(context));
       }
     },
   });
@@ -47,14 +48,21 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
       if (!notionTokenReady()) { warnMissingToken("sleepOnItReviewer"); return emptySync(); }
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
       if (!isMorningReviewWindow(tz)) return { changes: [], hasMore: false };
+      const notion = notionClient(context);
 
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
       if (!FROZEN_DS) return { changes: [], hasMore: false };
 
-      const res: any = await withRetryOn429(() => context.notion.databases.query({
-        database_id: FROZEN_DS,
-        filter: { property: "Status", select: { equals: "frozen" } },
-      }));
+      let res: any;
+      try {
+        res = await withRetryOn429(() => notion.dataSources.query({
+          data_source_id: FROZEN_DS,
+          filter: { property: "Status", select: { equals: "frozen" } },
+        }));
+      } catch (e: any) {
+        if (isNotionObjectNotFound(e)) return { changes: [], hasMore: false };
+        throw e;
+      }
       const changes = res.results.map((row: any) => ({
         type: "upsert" as const,
         key: readText(row, "Draft ID"),
@@ -70,19 +78,26 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     schedule: "1d",
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("sleepOnItCleanup"); return emptySync(); }
+      const notion = notionClient(context);
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
       if (!FROZEN_DS) return { changes: [], hasMore: false };
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-      const res: any = await withRetryOn429(() => context.notion.databases.query({
-        database_id: FROZEN_DS,
-        filter: {
-          and: [
-            { property: "Status", select: { equals: "ready" } },
-            { property: "Frozen At", date: { before: sevenDaysAgo } },
-          ],
-        },
-      }));
+      let res: any;
+      try {
+        res = await withRetryOn429(() => notion.dataSources.query({
+          data_source_id: FROZEN_DS,
+          filter: {
+            and: [
+              { property: "Status", select: { equals: "ready" } },
+              { property: "Frozen At", date: { before: sevenDaysAgo } },
+            ],
+          },
+        }));
+      } catch (e: any) {
+        if (isNotionObjectNotFound(e)) return { changes: [], hasMore: false };
+        throw e;
+      }
       const changes = res.results.map((row: any) => ({
         type: "upsert" as const,
         key: readText(row, "Draft ID"),
@@ -101,24 +116,25 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
     }),
     outputSchema: j.object({ ok: j.boolean(), error: j.string().nullable() }),
     execute: async ({ draftId, decision }: any, context: any) => {
+      const notion = notionClient(context);
       const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
       if (!FROZEN_DS) return { ok: false, error: "FROZEN_DRAFTS_DATA_SOURCE_ID not set" };
 
-      const row = await fetchDraftRow(context.notion, FROZEN_DS, draftId);
+      const row = await fetchDraftRow(notion, FROZEN_DS, draftId);
       if (!row) return { ok: false, error: "draft not found" };
 
       if (decision === "approve") {
         const sourcePageId = readText(row, "Source Page ID");
         const rewrite = readText(row, "Rewrite");
         try {
-          await replacePageContent(context.notion, sourcePageId, rewrite);
-          await stampDraft(context.notion, row.id, { status: "approved" });
+          await replacePageContent(notion, sourcePageId, rewrite);
+          await stampDraft(notion, row.id, { status: "approved" });
         } catch (e: any) {
-          await stampDraft(context.notion, row.id, { status: "error", error: String(e).slice(0, 1900) });
+          await stampDraft(notion, row.id, { status: "error", error: String(e).slice(0, 1900) });
           return { ok: false, error: String(e) };
         }
       } else {
-        await stampDraft(context.notion, row.id, { status: "rejected" });
+        await stampDraft(notion, row.id, { status: "rejected" });
       }
       return { ok: true, error: null };
     },
@@ -128,8 +144,8 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
 // ---------------- handlers ----------------
 
 function verifySignature(event: any) {
-  const secret = process.env.NOTION_WEBHOOK_SECRET;
-  if (!secret) throw new WebhookVerificationError("NOTION_WEBHOOK_SECRET not set");
+  const secret = process.env.COMPOST_WEBHOOK_SECRET || process.env.NOTION_WEBHOOK_SECRET;
+  if (!secret) throw new WebhookVerificationError("COMPOST_WEBHOOK_SECRET not set");
   const headerVal = event.headers?.["x-notion-signature"] ?? "";
   const expected = "sha256=" + crypto.createHmac("sha256", secret).update(event.rawBody).digest("hex");
   const a = Buffer.from(headerVal);
@@ -139,17 +155,17 @@ function verifySignature(event: any) {
   }
 }
 
-async function handleEdit(event: any, context: any) {
+async function handleEdit(event: any, notion: any) {
   const pageId = event.body?.entity?.id ?? event.body?.page_id;
   if (!pageId) return;
 
   const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
   if (!isLateNight(tz)) return;
 
-  const page = await context.notion.pages.retrieve({ page_id: pageId });
+  const page = await notion.pages.retrieve({ page_id: pageId });
   if (page.archived) return;
 
-  const blocks = await context.notion.blocks.children.list({ block_id: pageId, page_size: 50 });
+  const blocks = await notion.blocks.children.list({ block_id: pageId, page_size: 50 });
   const markdown = blocksToMarkdown(blocks.results);
   if (wordCount(markdown) < 30) return;
 
@@ -158,12 +174,12 @@ async function handleEdit(event: any, context: any) {
   if (/\[!ship\]/i.test(title)) return;
 
   // Dedup: skip if active draft exists for this page already tonight
-  if (await hasActiveDraft(context.notion, pageId)) return;
+  if (await hasActiveDraft(notion, pageId)) return;
 
   const draftId = sha1(`${pageId}|${new Date().toISOString().slice(0, 10)}`);
 
   // Snapshot
-  await upsertFrozenDraftRow(context.notion, {
+  await upsertFrozenDraftRow(notion, {
     draftId, pageId, title, original: markdown, rewrite: "", status: "pending",
     frozenAt: new Date().toISOString(),
   });
@@ -171,9 +187,9 @@ async function handleEdit(event: any, context: any) {
   // LLM rewrite
   try {
     const rewrite = await calmRewrite(markdown, title);
-    await upsertFrozenDraftRow(context.notion, { draftId, status: "frozen", rewrite });
+    await upsertFrozenDraftRow(notion, { draftId, status: "frozen", rewrite });
   } catch (e: any) {
-    await upsertFrozenDraftRow(context.notion, { draftId, status: "error", error: String(e).slice(0, 1900) });
+    await upsertFrozenDraftRow(notion, { draftId, status: "error", error: String(e).slice(0, 1900) });
   }
 }
 
@@ -225,11 +241,21 @@ async function hasActiveDraft(notion: any, pageId: string): Promise<boolean> {
 }
 
 async function fetchDraftRow(notion: any, dataSourceId: string, draftId: string): Promise<any | null> {
-  const res: any = await notion.databases.query({
-    database_id: dataSourceId,
-    filter: { property: "Draft ID", rich_text: { equals: draftId } },
-  });
+  let res: any;
+  try {
+    res = await notion.dataSources.query({
+      data_source_id: dataSourceId,
+      filter: { property: "Draft ID", rich_text: { equals: draftId } },
+    });
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) return null;
+    throw e;
+  }
   return res.results[0] ?? null;
+}
+
+function isNotionObjectNotFound(e: any): boolean {
+  return e?.code === "object_not_found" || /Could not find database|not shared with your integration/i.test(String(e?.message ?? e));
 }
 
 async function stampDraft(notion: any, pageId: string, fields: { status: string; error?: string }) {

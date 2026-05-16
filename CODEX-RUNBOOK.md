@@ -26,7 +26,7 @@ Then state in your first reply what sprint you're starting and what you'll have 
 4. **Schedules are interval strings**, not cron — `"5m"` to `"7d"`. Specific-hour behavior via `"1d"` + internal time gate.
 5. **350ms sleep between Notion API calls** to stay under the 3 rps limit. Use the `pace()` helper in `utils/rate-limit.ts`.
 6. **Never auto-delete user content** — apply-pass only acts on `Approved=true AND Applied=false` rows and stamps idempotently.
-7. **Verify webhook signatures** via `crypto.timingSafeEqual` and `HMAC-SHA256(rawBody, NOTION_WEBHOOK_SECRET)`. Throw `WebhookVerificationError` on mismatch.
+7. **Verify webhook signatures** via `crypto.timingSafeEqual` and `HMAC-SHA256(rawBody, COMPOST_WEBHOOK_SECRET)`. Throw `WebhookVerificationError` on mismatch.
 8. **Secrets via `ntn workers env set`**, accessed as `process.env.KEY`. Never commit `.env`.
 9. **Commit at sprint boundary**. Format: `[workers] S<n> <imperative>: <one-liner>`.
 10. **If you blow past sprint time-box, stop and ask** — don't ship a half-feature.
@@ -102,7 +102,7 @@ return {
 ```typescript
 function verify(event) {
   const sig = event.headers["x-notion-signature"];
-  const expected = "sha256=" + crypto.createHmac("sha256", process.env.NOTION_WEBHOOK_SECRET).update(event.rawBody).digest("hex");
+  const expected = "sha256=" + crypto.createHmac("sha256", process.env.COMPOST_WEBHOOK_SECRET).update(event.rawBody).digest("hex");
   if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
     throw new WebhookVerificationError("bad sig");
   }

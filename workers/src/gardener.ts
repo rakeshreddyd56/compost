@@ -14,6 +14,7 @@ import * as Builder from "@notionhq/workers/builder";
 import { pace, sleep, withRetryOn429 } from "./utils/rate-limit";
 import { sha1, proposalId } from "./utils/hashing";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
+import { notionClient } from "./utils/notion-auth";
 import {
   ageScore, orphanScore, stubScore, taglessScore, brokenLinkScore,
   decay, describeReason, pickAction, DECAY_THRESHOLD, type Signals,
@@ -29,8 +30,9 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
     schedule: "1d",
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("gardener"); return emptySync(); }
+      const notion = notionClient(context);
       // --- Phase 1: Walk ---
-      const pages = await walkWorkspace(context.notion);
+      const pages = await walkWorkspace(notion);
 
       // --- Phase 2: Score ---
       const linkGraph = buildLinkGraph(pages);
@@ -42,7 +44,7 @@ export function registerGardener(worker: any, dbs: { compostPile: any; embedding
         .map(toProposalChange);
 
       // --- Phase 5: Apply ---
-      const applyChanges = await applyApproved(context.notion);
+      const applyChanges = await applyApproved(notion);
 
       return {
         changes: [...proposalChanges, ...applyChanges],
@@ -156,17 +158,26 @@ export async function applyApproved(notion: any): Promise<any[]> {
   const COMPOST_PILE_DATA_SOURCE_ID = process.env.COMPOST_PILE_DATA_SOURCE_ID;
   if (!COMPOST_PILE_DATA_SOURCE_ID) return [];
 
-  const res: any = await withRetryOn429(() =>
-    notion.databases.query({
-      database_id: COMPOST_PILE_DATA_SOURCE_ID,
-      filter: {
-        and: [
-          { property: "Approved", checkbox: { equals: true } },
-          { property: "Applied",  checkbox: { equals: false } },
-        ],
-      },
-    })
-  );
+  let res: any;
+  try {
+    res = await withRetryOn429(() =>
+      notion.dataSources.query({
+        data_source_id: COMPOST_PILE_DATA_SOURCE_ID,
+        filter: {
+          and: [
+            { property: "Approved", checkbox: { equals: true } },
+            { property: "Applied",  checkbox: { equals: false } },
+          ],
+        },
+      })
+    );
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) {
+      console.warn("applyApproved skipped: Compost Pile data source is not shared with the integration");
+      return [];
+    }
+    throw e;
+  }
 
   const changes: any[] = [];
   for (const row of res.results) {
@@ -188,6 +199,10 @@ export async function applyApproved(notion: any): Promise<any[]> {
     await pace();
   }
   return changes;
+}
+
+function isNotionObjectNotFound(e: any): boolean {
+  return e?.code === "object_not_found" || /Could not find database|not shared with your integration/i.test(String(e?.message ?? e));
 }
 
 async function executeAction(notion: any, row: any) {

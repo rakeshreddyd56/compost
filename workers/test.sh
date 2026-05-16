@@ -10,8 +10,8 @@ echo "=== ping (no notion needed) ==="
 ~/.local/bin/ntn workers exec ping --remote -d '{}'
 
 echo ""
-echo "=== tidyNow (needs NOTION_API_TOKEN in env push) ==="
-~/.local/bin/ntn workers exec tidyNow --remote -d '{}' || echo "(expected to fail until NOTION_API_TOKEN pushed)"
+echo "=== tidyNow (needs COMPOST_NOTION_TOKEN in env push) ==="
+~/.local/bin/ntn workers exec tidyNow --remote -d '{}' || echo "(expected to fail until COMPOST_NOTION_TOKEN pushed)"
 
 echo ""
 echo "=== reviewDraft (needs a real draftId) ==="

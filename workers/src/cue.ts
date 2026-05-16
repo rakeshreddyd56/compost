@@ -14,6 +14,7 @@ import * as Builder from "@notionhq/workers/builder";
 import { pace, withRetryOn429 } from "./utils/rate-limit";
 import { sha1 } from "./utils/hashing";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
+import { notionClient } from "./utils/notion-auth";
 
 interface Moment {
   startISO: string;
@@ -33,11 +34,12 @@ export function registerCue(worker: any, dbs: { cueCards: any; pacer: any }) {
     schedule: "5m",
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("cue"); return emptySync(); }
-      const sources = await findCueSources(context.notion);
+      const notion = notionClient(context);
+      const sources = await findCueSources(notion);
       const changes: any[] = [];
       for (const page of sources) {
         try {
-          const timeline = await parseTimeline(context.notion, page);
+          const timeline = await parseTimeline(notion, page);
           const { current, next } = pickCurrentAndNext(timeline);
           if (!current && !next) continue;
           const calmCue = await calmRephrase(current, next, page);
@@ -242,15 +244,15 @@ function buildCardChange(page: any, current: Moment | null, next: Moment | null,
       "Card ID":            Builder.richText(id),
       "Source Page ID":     Builder.richText(page.id),
       "Source Title":       Builder.richText(pageTitle(page)),
-      "Current Time":       current ? Builder.date(current.startISO) : Builder.richText(""),
+      "Current Time":       current ? Builder.dateTime(current.startISO) : Builder.richText(""),
       "Current Heading":    Builder.richText(current?.heading ?? ""),
       "Current Bullets":    Builder.richText((current?.bullets ?? []).join("\n")),
-      "Next Time":          next ? Builder.date(next.startISO) : Builder.richText(""),
+      "Next Time":          next ? Builder.dateTime(next.startISO) : Builder.richText(""),
       "Next Heading":       Builder.richText(next?.heading ?? ""),
       "Next Bullets":       Builder.richText((next?.bullets ?? []).join("\n")),
       "Minutes Until Next": Builder.number(untilNext),
       "Calm Cue":           Builder.richText(calmCue),
-      "Generated At":       Builder.date(new Date().toISOString()),
+      "Generated At":       Builder.dateTime(new Date().toISOString()),
     },
   };
 }
