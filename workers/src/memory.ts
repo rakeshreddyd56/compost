@@ -49,6 +49,7 @@ export function registerMemory(worker: any, dbs: { notionMemory: any; embeddings
       const records = await buildMemoryRecords(notion);
       await archiveLiveNonItemRows(notion);
       await upsertLiveMemoryRows(notion, records);
+      await archiveRowsWithMissingSources(notion);
       await archiveDuplicateLiveRows(notion);
       return {
         changes: records.map(memoryChange),
@@ -390,6 +391,52 @@ async function archiveDuplicateLiveRows(notion: any) {
   }
 }
 
+async function archiveRowsWithMissingSources(notion: any) {
+  const dataSourceId = memoryDataSourceId();
+  if (!dataSourceId) return;
+
+  try {
+    const rows = await fetchActiveLiveMemoryRows(notion, dataSourceId);
+    for (const row of rows) {
+      const sourcePageId = readText(row, "Source Page ID");
+      if (!sourcePageId) continue;
+
+      const source = await fetchSourcePageForCleanup(notion, sourcePageId);
+      if (!source || source.archived || !isMemorySource(source)) {
+        await notion.pages.update({ page_id: row.id, archived: true });
+        await pace();
+      }
+    }
+  } catch (e: any) {
+    console.warn("live memory missing-source cleanup skipped:", shortError(e));
+  }
+}
+
+async function fetchActiveLiveMemoryRows(notion: any, dataSourceId: string): Promise<any[]> {
+  const rows: any[] = [];
+  let cursor: string | undefined = undefined;
+  do {
+    const res: any = await notion.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 100,
+      start_cursor: cursor,
+    });
+    rows.push(...(res.results ?? []).filter((row: any) => !row.archived));
+    cursor = res.has_more ? res.next_cursor : undefined;
+    await pace();
+  } while (cursor && rows.length < 500);
+  return rows;
+}
+
+async function fetchSourcePageForCleanup(notion: any, pageId: string): Promise<any | null> {
+  try {
+    return await withRetryOn429(() => notion.pages.retrieve({ page_id: pageId }));
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) return null;
+    throw e;
+  }
+}
+
 function compareMemoryRowsForKeep(a: any, b: any): number {
   const captionA = readText(a, "Caption");
   const captionB = readText(b, "Caption");
@@ -718,4 +765,8 @@ function richTextProp(text: string) {
 
 function shortError(e: any): string {
   return String(e?.message ?? e).slice(0, 500);
+}
+
+function isNotionObjectNotFound(e: any): boolean {
+  return e?.code === "object_not_found" || /Could not find database|Could not find page|not shared with your integration/i.test(String(e?.message ?? e));
 }
