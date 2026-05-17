@@ -16,6 +16,7 @@ import { j } from "@notionhq/workers/schema-builder";
 import { registerGardener }   from "./gardener.js";
 import { registerSleepOnIt }  from "./sleep-on-it.js";
 import { registerCue }        from "./cue.js";
+import { registerMemory }     from "./memory.js";
 // import { registerWeekly }  from "./weekly.js";  // STRETCH
 import { registerTools }      from "./tools.js";
 
@@ -116,12 +117,41 @@ export const embeddingsCache = worker.database("embeddingsCache", {
   },
 });
 
+export const notionMemory = worker.database("notionMemory", {
+  type: "managed",
+  initialTitle: "🧠 Notion Memory",
+  primaryKeyProperty: "Memory ID",
+  schema: {
+    properties: {
+      Title:            Schema.title(),
+      "Memory ID":      Schema.richText(),
+      "Source Page ID": Schema.richText(),
+      Type:             Schema.select([
+        { name: "photo" },
+        { name: "note" },
+        { name: "clip" },
+      ]),
+      Content:          Schema.richText(),
+      Caption:          Schema.richText(),
+      "Captured At":    Schema.date(),
+      Tags:             Schema.multiSelect([
+        { name: "idea" },
+        { name: "todo" },
+        { name: "reference" },
+        { name: "moment" },
+      ]),
+      "Embedding ID":   Schema.richText(),
+    },
+  },
+});
+
 // --- register workers ---
 // Codex 5.5: in S2, finish wiring each registerX function to consume the pacer.
 // Use `await notionPacer.wait()` before every notion.* call inside execute().
 registerGardener(worker, { compostPile, embeddingsCache, pacer: notionPacer });
 registerSleepOnIt(worker, { frozenDrafts, pacer: notionPacer });
 registerCue(worker, { cueCards, pacer: notionPacer });
+registerMemory(worker, { notionMemory, embeddingsCache, pacer: notionPacer });
 // registerWeekly(worker, { weeklySnapshots, weeklyDigests, pacer: notionPacer });  // STRETCH
 registerTools(worker, { compostPile, frozenDrafts });
 
