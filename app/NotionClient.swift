@@ -17,9 +17,18 @@ struct NotionDbIds {
     static let empty = NotionDbIds(compostPile: "", frozenDrafts: "", weeklyDigests: "", cueCards: "", parentPage: "")
 }
 
-enum NotionError: Error {
+enum NotionError: Error, LocalizedError {
     case httpStatus(Int, String)
     case decoding
+    case toolFailed(String)  // ntn CLI non-zero exit OR worker returned { ok: false }
+
+    var errorDescription: String? {
+        switch self {
+        case .httpStatus(let code, let body): return "HTTP \(code): \(body)"
+        case .decoding: return "Couldn't decode Notion response"
+        case .toolFailed(let reason): return reason
+        }
+    }
 }
 
 final class NotionClient {
@@ -102,7 +111,20 @@ final class NotionClient {
     func currentCueCard() async throws -> CueCard? {
         guard !ids.cueCards.isEmpty else { return nil }
         let pages = try await queryDatabase(ids.cueCards, filter: nil)
-        return pages.compactMap(CueCard.init).first
+        // Multiple cueCards rows may exist (one per Cue source page).
+        // Pick the most recently generated so the notch always reflects
+        // the freshest "right now" rather than whatever Notion returned first.
+        return pages
+            .compactMap(CueCard.init)
+            .sorted { lhs, rhs in
+                let lg = lhs.generatedAt ?? .distantPast
+                let rg = rhs.generatedAt ?? .distantPast
+                if lg != rg { return lg > rg }
+                let lc = lhs.currentTime ?? .distantPast
+                let rc = rhs.currentTime ?? .distantPast
+                return lc > rc
+            }
+            .first
     }
 
     // MARK: - Tool invocation
@@ -112,20 +134,28 @@ final class NotionClient {
     //  (B) Shell out to `ntn workers exec <toolName> --remote -d '<json>'`.
 
     func invokeTool(_ toolName: String, input: [String: Any]) async throws -> Data {
-        // Try (A): direct REST. Endpoint path is TBD — adjust on Saturday.
+        // Try (A): direct REST. Endpoint path is TBD — when it returns 200 we
+        // trust it. Any other status (or thrown error) falls through to the
+        // CLI which is the source of truth right now.
         do {
             var req = authed(base.appendingPathComponent("workers/tools/\(toolName)/invoke"))
             req.httpMethod = "POST"
             req.httpBody = try JSONSerialization.data(withJSONObject: input)
             let (data, resp) = try await session.data(for: req)
-            if let http = resp as? HTTPURLResponse, http.statusCode == 200 { return data }
-        } catch { /* fall through */ }
+            if let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+                try Self.validateToolResponse(data)
+                return data
+            }
+        } catch let e as NotionError {
+            // A REST tool response that parsed as {ok:false} is a real failure —
+            // don't fall through to the CLI just to retry; surface the failure.
+            if case .toolFailed = e { throw e }
+        } catch { /* network/etc: fall through to CLI */ }
 
         // (B): shell-out fallback to `ntn workers exec`.
         // `ntn` reads workers.json from the current working directory to find
         // the worker ID — without cwd it fails with "No worker ID found" when
-        // the app is launched from the .app bundle. Resolve workers dir from
-        // env override first, then the canonical ~/compost/workers path.
+        // the app is launched from the .app bundle.
         let json = try JSONSerialization.data(withJSONObject: input)
         let jsonString = String(data: json, encoding: .utf8) ?? "{}"
 
@@ -139,7 +169,49 @@ final class NotionClient {
         task.standardError = pipe
         try task.run()
         task.waitUntilExit()
-        return pipe.fileHandleForReading.readDataToEndOfFile()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+        if task.terminationStatus != 0 {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let reason = trimmed.isEmpty
+                ? "ntn workers exec \(toolName) exited \(task.terminationStatus)"
+                : "ntn \(toolName) failed: \(String(trimmed.prefix(160)))"
+            throw NotionError.toolFailed(reason)
+        }
+
+        try Self.validateToolResponse(data)
+        return data
+    }
+
+    /// Parse the tool response and throw if it is a JSON object whose `ok`
+    /// field is explicitly false. Tools without an `ok` field (e.g. tidyNow)
+    /// are considered successful by virtue of a zero exit / 200 response.
+    private static func validateToolResponse(_ data: Data) throws {
+        // ntn sometimes prefixes JSON with diagnostic lines — pull the last
+        // JSON-looking line if the whole blob isn't directly parseable.
+        let parsed: Any? = (try? JSONSerialization.jsonObject(with: data))
+            ?? jsonObjectFromLastLine(of: data)
+        guard let dict = parsed as? [String: Any] else { return }
+        if let ok = dict["ok"] as? Bool, ok == false {
+            let err = (dict["error"] as? String) ?? "tool reported ok=false"
+            throw NotionError.toolFailed(err)
+        }
+    }
+
+    private static func jsonObjectFromLastLine(of data: Data) -> Any? {
+        guard let s = String(data: data, encoding: .utf8) else { return nil }
+        let lines = s.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .reversed()
+        for line in lines where line.first == "{" {
+            if let d = line.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: d) {
+                return obj
+            }
+        }
+        return nil
     }
 
     private static func workersDirectoryURL() -> URL {

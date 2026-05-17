@@ -93,6 +93,8 @@ struct CueCard: Identifiable {
     let nextBullets: String
     let minutesUntilNext: Int
     let calmCue: String
+    let generatedAt: Date?  // for picking the newest when multiple rows exist
+    let currentTime: Date?  // for tie-breaks
 
     init?(_ page: NotionPage) {
         self.id = page.id
@@ -111,5 +113,19 @@ struct CueCard: Identifiable {
             self.minutesUntilNext = 0
         }
         self.calmCue = page.properties["Calm Cue"]?.plainText ?? ""
+        self.generatedAt = Self.parseDate(page.properties["Generated At"]?.date?.start)
+        self.currentTime = Self.parseDate(page.properties["Current Time"]?.date?.start)
+    }
+
+    private static func parseDate(_ s: String?) -> Date? {
+        guard let s, !s.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: s) { return d }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: String(s.prefix(10)))
     }
 }

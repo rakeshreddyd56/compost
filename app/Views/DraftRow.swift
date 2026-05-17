@@ -55,32 +55,45 @@ struct DraftRow: View {
             }
 
             HStack(spacing: 8) {
+                let busy = manager.inflight.contains(.reviewDraft(draft.id))
                 Button(action: {
                     Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
                 }) {
-                    Text("Keep mine")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.15))
-                        .cornerRadius(GardenStyle.cornerRadius)
+                    HStack(spacing: 4) {
+                        if busy { ProgressView().controlSize(.mini) }
+                        Text("Keep mine")
+                            .font(.caption.weight(.medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.15))
+                    .cornerRadius(GardenStyle.cornerRadius)
+                    .opacity(busy ? 0.7 : 1.0)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Keep my original draft")
+                .disabled(busy)
+                .accessibilityLabel(busy ? "Reviewing draft" : "Keep my original draft")
 
                 Button(action: {
                     Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
                 }) {
-                    Text("Use calmer")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .foregroundColor(.white)
-                        .background(GardenStyle.accentGreen)
-                        .cornerRadius(GardenStyle.cornerRadius)
+                    HStack(spacing: 4) {
+                        if busy {
+                            ProgressView().controlSize(.mini).tint(.white)
+                        }
+                        Text("Use calmer")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .foregroundColor(.white)
+                    .background(GardenStyle.accentGreen)
+                    .cornerRadius(GardenStyle.cornerRadius)
+                    .opacity(busy ? 0.85 : 1.0)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Use the calmer rewrite")
+                .disabled(busy)
+                .accessibilityLabel(busy ? "Reviewing draft" : "Use the calmer rewrite")
                 Spacer()
             }
         }
