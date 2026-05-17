@@ -19,6 +19,24 @@ struct DraftRow: View {
         manager.draftErrors[draft.id]
     }
 
+    /// True when the Worker's "calmer" rewrite is the same text as the user's
+    /// original (after whitespace normalization). Common when the late-night
+    /// edit was already calm — the rewrite is a no-op. We surface this
+    /// truthfully so the user doesn't approve a change that won't visibly
+    /// alter their Notion page.
+    private var alreadyCalm: Bool {
+        let a = Self.normalize(draft.original)
+        let b = Self.normalize(draft.rewrite)
+        return !a.isEmpty && a == b
+    }
+
+    private static func normalize(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
@@ -53,10 +71,13 @@ struct DraftRow: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(draft.title)
-                    .font(.system(.callout, design: .rounded).weight(.semibold))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(draft.title)
+                        .font(.system(.callout, design: .rounded).weight(.semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    if alreadyCalm { alreadyCalmBadge }
+                }
                 if !draft.frozenAt.isEmpty {
                     Text("frozen \(prettyTime(draft.frozenAt))")
                         .font(.caption2)
@@ -77,6 +98,22 @@ struct DraftRow: View {
             .help("Show original vs. calmer rewrite side by side")
             .accessibilityLabel(showSideBySide ? "Hide side-by-side" : "Show side-by-side comparison")
         }
+    }
+
+    private var alreadyCalmBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Already calm")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+        }
+        .foregroundColor(GardenStyle.accentGreen)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(GardenStyle.accentGreen.opacity(0.12))
+        .clipShape(Capsule())
+        .help("Original and calmer rewrite are the same — approving won't change your Notion page.")
+        .accessibilityLabel("Already calm — rewrite matches original")
     }
 
     // MARK: - Collapsed hero: just the calmer rewrite
@@ -105,23 +142,52 @@ struct DraftRow: View {
 
     private var sideBySide: some View {
         let diff = ToneDiff(original: draft.original, calmer: draft.rewrite)
-        return HStack(alignment: .top, spacing: 8) {
-            sideColumn(
-                title: "Original",
-                tint: .red,
-                body: diff.originalText,
-                empty: draft.original.isEmpty
-            )
-            sideColumn(
-                title: "Calmer",
-                tint: GardenStyle.accentGreen,
-                body: diff.calmerText,
-                empty: draft.rewrite.isEmpty
-            )
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                sideColumn(
+                    title: "Original",
+                    tint: .red,
+                    body: diff.originalText,
+                    empty: draft.original.isEmpty
+                )
+                sideColumn(
+                    title: "Calmer",
+                    tint: GardenStyle.accentGreen,
+                    body: diff.calmerText,
+                    empty: draft.rewrite.isEmpty
+                )
+            }
+            if !draft.sourcePageId.isEmpty {
+                openSourceLink
+            }
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Original on left, calmer rewrite on right")
+    }
+
+    /// Direct link to the Notion source page so the user can confirm which
+    /// document they're actually about to mutate before clicking Use calmer.
+    private var openSourceLink: some View {
+        Button(action: openSource) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption2)
+                Text("Open source")
+                    .font(.caption)
+                    .underline()
+            }
+            .foregroundColor(GardenStyle.accentGreen)
+        }
+        .buttonStyle(.plain)
+        .help("Open the source Notion page that this draft was extracted from")
+        .accessibilityLabel("Open the source Notion page")
+    }
+
+    private func openSource() {
+        let id = draft.sourcePageId.replacingOccurrences(of: "-", with: "")
+        guard !id.isEmpty, let url = URL(string: "notion://www.notion.so/\(id)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func sideColumn(title: String, tint: Color, body: Text, empty: Bool) -> some View {
@@ -149,47 +215,72 @@ struct DraftRow: View {
     // MARK: - Buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button(action: {
-                Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
-            }) {
-                HStack(spacing: 4) {
-                    if busy { ProgressView().controlSize(.mini) }
-                    Text("Keep mine")
-                        .font(.caption.weight(.medium))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.15))
-                .cornerRadius(GardenStyle.cornerRadius)
-                .opacity(busy ? 0.7 : 1.0)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                keepMineButton
+                useCalmerButton
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(busy ? "Reviewing draft" : "Keep my original draft")
-            .help("Reject the rewrite and keep your original")
-
-            Button(action: {
-                Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
-            }) {
-                HStack(spacing: 4) {
-                    if busy { ProgressView().controlSize(.mini).tint(.white) }
-                    Text("Use calmer")
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .foregroundColor(.white)
-                .background(GardenStyle.accentGreen)
-                .cornerRadius(GardenStyle.cornerRadius)
-                .opacity(busy ? 0.85 : 1.0)
+            if busy {
+                LongActionHint(start: manager.inflightStartedAt[.reviewDraft(draft.id)])
             }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(busy ? "Reviewing draft" : "Use the calmer rewrite")
-            .help("Approve the rewrite — Notion page gets updated")
-            Spacer()
         }
+    }
+
+    private var keepMineButton: some View {
+        Button(action: {
+            Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
+        }) {
+            HStack(spacing: 4) {
+                if busy { ProgressView().controlSize(.mini) }
+                Text("Keep mine")
+                    .font(.caption.weight(.medium))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.15))
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.7 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .accessibilityLabel(busy ? "Reviewing draft" : "Keep my original draft")
+        .help("Reject the rewrite and keep your original")
+    }
+
+    private var useCalmerButton: some View {
+        // When the rewrite already matches the original, Use calmer would
+        // approve a no-op write to the Notion page. Disable it and relabel
+        // so the user isn't tricked into thinking they'll see a change.
+        let disabled = busy || alreadyCalm
+        let label = alreadyCalm ? "Already calm" : (busy ? "Use calmer" : "Use calmer")
+        return Button(action: {
+            Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
+        }) {
+            HStack(spacing: 4) {
+                if busy { ProgressView().controlSize(.mini).tint(.white) }
+                else if alreadyCalm { Image(systemName: "checkmark.seal.fill").font(.caption2) }
+                Text(label)
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .foregroundColor(.white)
+            .background(alreadyCalm ? GardenStyle.accentGreen.opacity(0.45) : GardenStyle.accentGreen)
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.85 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(
+            alreadyCalm ? "Already calm — no rewrite needed"
+                        : (busy ? "Reviewing draft" : "Use the calmer rewrite")
+        )
+        .help(
+            alreadyCalm
+                ? "Original and calmer rewrite are identical — approving wouldn't change your Notion page."
+                : "Approve the rewrite — Notion page gets updated"
+        )
     }
 
     // MARK: - Per-draft error banner
@@ -203,12 +294,14 @@ struct DraftRow: View {
             Text(err)
                 .font(.caption2)
                 .foregroundColor(.primary)
-                .lineLimit(3)
-            Spacer()
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
         }
         .padding(8)
         .background(Color.red.opacity(0.08))
         .cornerRadius(GardenStyle.cornerRadius)
+        .help(err)
         .accessibilityLabel("Review failed: \(err)")
     }
 

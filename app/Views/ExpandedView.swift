@@ -219,27 +219,33 @@ struct ExpandedView: View {
 
     private var tidyButton: some View {
         let busy = manager.inflight.contains(.tidyNow)
-        return Button(action: { Task { await manager.tidyNow() } }) {
-            HStack(spacing: 4) {
-                if busy {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else {
-                    Image(systemName: "arrow.clockwise").font(.caption)
+        return VStack(alignment: .trailing, spacing: 2) {
+            Button(action: { Task { await manager.tidyNow() } }) {
+                HStack(spacing: 4) {
+                    if busy {
+                        ProgressView().controlSize(.small).tint(.white)
+                    } else {
+                        Image(systemName: "arrow.clockwise").font(.caption)
+                    }
+                    Text(busy ? "Refreshing…" : "Refresh tidy").font(.caption.weight(.semibold))
                 }
-                Text(busy ? "Refreshing…" : "Refresh tidy").font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .foregroundColor(.white)
+                .background(GardenStyle.accentGreen)
+                .cornerRadius(GardenStyle.cornerRadius)
+                .opacity(busy ? 0.85 : 1.0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
-            .opacity(busy ? 0.85 : 1.0)
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .help("Refresh Gardener proposals (does not apply anything)")
+            .accessibilityLabel(busy ? "Refreshing tidy proposals" : "Refresh tidy")
+            .accessibilityHint("Refreshes the Gardener proposal list without applying any actions")
+
+            if busy {
+                LongActionHint(start: manager.inflightStartedAt[.tidyNow])
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(busy)
-        .help("Refresh Gardener proposals (does not apply anything)")
-        .accessibilityLabel(busy ? "Refreshing tidy proposals" : "Refresh tidy")
-        .accessibilityHint("Refreshes the Gardener proposal list without applying any actions")
     }
 
     // MARK: - Helpers

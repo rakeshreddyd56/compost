@@ -129,31 +129,37 @@ struct ProposalRow: View {
     }
 
     private var approveApplyButton: some View {
-        Button(action: {
-            Task { await manager.applyProposal(proposal) }
-        }) {
-            HStack(spacing: 4) {
-                if busy {
-                    ProgressView().controlSize(.mini).tint(.white)
-                } else {
-                    Image(systemName: "checkmark.seal.fill").font(.caption2)
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: {
+                Task { await manager.applyProposal(proposal) }
+            }) {
+                HStack(spacing: 4) {
+                    if busy {
+                        ProgressView().controlSize(.mini).tint(.white)
+                    } else {
+                        Image(systemName: "checkmark.seal.fill").font(.caption2)
+                    }
+                    Text(busy ? "Applying…" : "Approve & apply")
+                        .font(.caption.weight(.semibold))
                 }
-                Text(busy ? "Applying…" : "Approve & apply")
-                    .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .foregroundColor(.white)
+                .background(GardenStyle.accentGreen)
+                .cornerRadius(GardenStyle.cornerRadius)
+                .opacity(busy ? 0.85 : 1.0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
-            .opacity(busy ? 0.85 : 1.0)
+            .buttonStyle(.plain)
+            .disabled(busy || proposal.proposalId.isEmpty)
+            .help(proposal.proposalId.isEmpty
+                  ? "Missing Proposal ID — worker can't address this row"
+                  : "Approve this proposal and run the action immediately")
+            .accessibilityLabel(busy ? "Applying proposal" : "Approve and apply proposal")
+
+            if busy {
+                LongActionHint(start: manager.inflightStartedAt[.applyProposal(proposal.proposalId)])
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(busy || proposal.proposalId.isEmpty)
-        .help(proposal.proposalId.isEmpty
-              ? "Missing Proposal ID — worker can't address this row"
-              : "Approve this proposal and run the action immediately")
-        .accessibilityLabel(busy ? "Applying proposal" : "Approve and apply proposal")
     }
 
     private func errorBanner(_ err: String) -> some View {
@@ -165,12 +171,14 @@ struct ProposalRow: View {
             Text(err)
                 .font(.caption2)
                 .foregroundColor(.primary)
-                .lineLimit(3)
-            Spacer()
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
         }
         .padding(8)
         .background(Color.red.opacity(0.08))
         .cornerRadius(GardenStyle.cornerRadius)
+        .help(err)
         .accessibilityLabel("Apply failed: \(err)")
     }
 

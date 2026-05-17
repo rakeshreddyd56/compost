@@ -41,6 +41,11 @@ final class NotchManager: ObservableObject {
     @Published private(set) var summary: NotchSummary = .empty
     @Published private(set) var hasLoadedOnce: Bool = false
     @Published private(set) var inflight: Set<InflightAction> = []
+    /// Wall-clock start time per in-flight action so the UI can render
+    /// "Still working in Notion…" (>5s) and "Notion is taking longer than
+    /// usual." (>15s) hints. Kept in lockstep with `inflight` via
+    /// beginInflight/endInflight.
+    @Published private(set) var inflightStartedAt: [InflightAction: Date] = [:]
     @Published private(set) var lastSuccess: SuccessPing?
     @Published private(set) var lastActionError: String?
     /// Inline error attached to a single proposal so the failing row can show
@@ -59,7 +64,17 @@ final class NotchManager: ObservableObject {
     private let hotkey: HotkeyManager
     private var hasAutoGreetedFirstLoad = false
     private static let resolvedDraftIdsKey = "compost.resolvedDraftIds"
+    private static let resolvedProposalIdsKey = "compost.resolvedProposalIds"
     private var resolvedDraftIds: Set<String>
+    /// Local optimistic hide list for proposals the user successfully applied
+    /// in this session. Mirrors `resolvedDraftIds`. Backed by UserDefaults so
+    /// the row doesn't briefly reappear between launches if the poller's next
+    /// snapshot still includes it.
+    private var resolvedProposalIds: Set<String>
+    /// Latest RAW summary from the poller, before client-side filters. Stored
+    /// so that resolving a proposal/draft locally can re-emit a filtered
+    /// summary immediately (no need to wait for the next 60s poll).
+    private var latestRawSummary: NotchSummary = .empty
 
     init(notion: NotionClient) {
         self.notion = notion
@@ -67,6 +82,7 @@ final class NotchManager: ObservableObject {
         self.wake = WakeTrigger()
         self.hotkey = HotkeyManager()
         self.resolvedDraftIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedDraftIdsKey) ?? [])
+        self.resolvedProposalIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedProposalIdsKey) ?? [])
     }
 
     func start() async {
@@ -89,10 +105,25 @@ final class NotchManager: ObservableObject {
     // MARK: - State transitions
 
     private func applySummary(_ s: NotchSummary) async {
-        let visibleDrafts = s.drafts.filter { !resolvedDraftIds.contains($0.id) }
+        latestRawSummary = s
+        await republishVisible(triggerAutoGreet: true)
+    }
+
+    /// Recompute the visible summary from the latest raw poll, applying the
+    /// local "resolved" hide-lists. Safe to call from action handlers after
+    /// they mark a row resolved so the UI updates immediately, without
+    /// waiting for the next 60s tick.
+    private func republishVisible(triggerAutoGreet: Bool) async {
+        let s = latestRawSummary
+        let visibleProposals = s.proposals.filter {
+            !resolvedProposalIds.contains($0.proposalId)
+        }
+        let visibleDrafts = s.drafts.filter {
+            !resolvedDraftIds.contains($0.id)
+        }
         let visible = NotchSummary(
-            proposalCount: s.proposals.count,
-            proposals: s.proposals,
+            proposalCount: visibleProposals.count,
+            proposals: visibleProposals,
             draftCount: visibleDrafts.count,
             drafts: visibleDrafts,
             digestReady: s.digestReady,
@@ -103,12 +134,13 @@ final class NotchManager: ObservableObject {
 
         summary = visible
         if visible.lastError == nil { hasLoadedOnce = true }
-        // Drop stale per-proposal errors for proposals that are no longer
-        // in the summary (applied, archived, or otherwise gone).
+        // Drop stale per-row errors for rows that are no longer visible
+        // (applied, archived, optimistically resolved, or otherwise gone).
         let liveProposalIds = Set(visible.proposals.map { $0.proposalId })
         proposalErrors = proposalErrors.filter { liveProposalIds.contains($0.key) }
         let liveDraftIds = Set(visible.drafts.map { $0.id })
         draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
+
         let total = visible.proposalCount + visible.draftCount + (visible.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state {
@@ -118,8 +150,8 @@ final class NotchManager: ObservableObject {
             return
         }
 
-        let shouldAutoGreet = !hasAutoGreetedFirstLoad
-        hasAutoGreetedFirstLoad = true
+        let shouldAutoGreet = triggerAutoGreet && !hasAutoGreetedFirstLoad
+        if triggerAutoGreet { hasAutoGreetedFirstLoad = true }
 
         switch state {
         case .hidden, .retracting:
@@ -157,53 +189,77 @@ final class NotchManager: ObservableObject {
     }
 
     func tidyNow() async {
-        await runAction(.tidyNow, success: .tidied) {
-            _ = try await self.notion.invokeTool("tidyNow", input: [:])
+        let action = InflightAction.tidyNow
+        let started = beginInflight(action)
+        logAction("tidyNow", phase: "start")
+        defer { endInflight(action) }
+
+        do {
+            _ = try await notion.invokeTool("tidyNow", input: [:])
+            logAction("tidyNow", phase: "success", elapsed: elapsed(since: started))
+            lastActionError = nil
+            flashSuccess(.tidied)
+        } catch {
+            let msg = errorMessage(error)
+            logAction("tidyNow", phase: "failed", elapsed: elapsed(since: started), detail: msg)
+            lastSuccess = nil
+            lastActionError = "Refresh failed: \(msg)"
+            scheduleClear(\.lastActionError, after: 4)
         }
+        // Detach the refresh so the spinner can clear immediately. The
+        // background poll updates `summary` when it lands.
+        scheduleBackgroundRefresh()
     }
 
     func applyApproved() async {
-        await runAction(.applyApproved, success: .applied) {
-            _ = try await self.notion.invokeTool("applyApproved", input: [:])
+        let action = InflightAction.applyApproved
+        let started = beginInflight(action)
+        logAction("applyApproved", phase: "start")
+        defer { endInflight(action) }
+
+        do {
+            _ = try await notion.invokeTool("applyApproved", input: [:])
+            logAction("applyApproved", phase: "success", elapsed: elapsed(since: started))
+            lastActionError = nil
+            flashSuccess(.applied)
+        } catch {
+            let msg = errorMessage(error)
+            logAction("applyApproved", phase: "failed", elapsed: elapsed(since: started), detail: msg)
+            lastSuccess = nil
+            lastActionError = "Apply failed: \(msg)"
+            scheduleClear(\.lastActionError, after: 4)
         }
+        scheduleBackgroundRefresh()
     }
 
     func reviewDraft(draftId: String, approve: Bool) async {
         let action = InflightAction.reviewDraft(draftId)
         let success = SuccessPing.reviewed(draftId)
-        // Clear the stale error eagerly — the user just chose to retry, so
-        // the red banner should vanish the moment the spinner appears, not
-        // wait for the next refresh.
+        let label = "reviewDraft[\(approve ? "approve" : "reject"):\(draftId.prefix(8))]"
+        // Clear the stale error eagerly — user retrying.
         draftErrors.removeValue(forKey: draftId)
-        inflight.insert(action)
-        defer { inflight.remove(action) }
+        let started = beginInflight(action)
+        logAction(label, phase: "start")
+        defer { endInflight(action) }
 
         do {
             _ = try await notion.invokeTool("reviewDraft", input: [
                 "draftId": draftId,
                 "decision": approve ? "approve" : "reject",
             ])
-            markDraftResolved(draftId)
+            logAction(label, phase: "success", elapsed: elapsed(since: started))
+            // Optimistically hide the row immediately — re-emit visible
+            // summary with the draft removed from the visible list.
+            await markDraftResolved(draftId)
             lastActionError = nil
-            lastSuccess = success
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(2))
-                if self?.lastSuccess == success { self?.lastSuccess = nil }
-            }
+            flashSuccess(success)
         } catch {
-            let msg = (error as? LocalizedError)?.errorDescription
-                  ?? String(describing: error)
+            let msg = errorMessage(error)
+            logAction(label, phase: "failed", elapsed: elapsed(since: started), detail: msg)
             draftErrors[draftId] = msg
             lastSuccess = nil
         }
-
-        await poller.refreshNow()
-    }
-
-    private func markDraftResolved(_ draftId: String) {
-        guard !draftId.isEmpty else { return }
-        resolvedDraftIds.insert(draftId)
-        UserDefaults.standard.set(Array(resolvedDraftIds), forKey: Self.resolvedDraftIdsKey)
+        scheduleBackgroundRefresh()
     }
 
     /// Approve and apply a single proposal in one click. Calls the Worker
@@ -221,73 +277,106 @@ final class NotchManager: ObservableObject {
 
         let action = InflightAction.applyProposal(pid)
         let success = SuccessPing.proposalApplied(proposal.title)
+        let label = "applyProposal[\(pid.prefix(8))]"
         // Clear the stale error eagerly so the red banner doesn't linger
         // while the user is watching the spinner on a retry.
         proposalErrors.removeValue(forKey: pid)
-        inflight.insert(action)
-        defer { inflight.remove(action) }
+        let started = beginInflight(action)
+        logAction(label, phase: "start")
+        defer { endInflight(action) }
 
         do {
             _ = try await notion.invokeTool("applyProposal", input: ["proposalId": pid])
+            logAction(label, phase: "success", elapsed: elapsed(since: started))
+            // Optimistically hide the row immediately. The next background
+            // poll should also drop it (Applied=true filters it out server-
+            // side); persisting in resolvedProposalIds means we don't briefly
+            // re-render it if that poll happens before the worker stamp.
+            await markProposalResolved(pid)
             lastActionError = nil
-            lastSuccess = success
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(2))
-                if self?.lastSuccess == success { self?.lastSuccess = nil }
-            }
+            flashSuccess(success)
         } catch {
-            let msg = (error as? LocalizedError)?.errorDescription
-                  ?? String(describing: error)
+            let msg = errorMessage(error)
+            logAction(label, phase: "failed", elapsed: elapsed(since: started), detail: msg)
             proposalErrors[pid] = msg
             lastSuccess = nil
         }
-
-        await poller.refreshNow()
+        scheduleBackgroundRefresh()
     }
 
-    /// Wrap a worker tool call with inflight tracking. Only sets `lastSuccess`
-    /// when the body returns without throwing. A throw goes into
-    /// `lastActionError` so the UI can show a red pip instead of a misleading
-    /// green ✓. Either way we trigger an immediate refresh so the badge
-    /// reflects whatever (if anything) the tool changed.
-    private func runAction(_ action: InflightAction,
-                           success: SuccessPing,
-                           body: () async throws -> Void) async {
+    // MARK: - Inflight / logging / refresh helpers
+
+    private func beginInflight(_ action: InflightAction) -> Date {
+        let now = Date()
         inflight.insert(action)
-        defer { inflight.remove(action) }
-
-        do {
-            try await body()
-            lastActionError = nil
-            lastSuccess = success
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(2))
-                if self?.lastSuccess == success { self?.lastSuccess = nil }
-            }
-        } catch {
-            lastSuccess = nil
-            lastActionError = Self.describeActionError(error, for: action)
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(4))
-                if self?.lastActionError != nil { self?.lastActionError = nil }
-            }
-        }
-
-        // Always refresh — even on failure — so the user sees the real state.
-        await poller.refreshNow()
+        inflightStartedAt[action] = now
+        return now
     }
 
-    private static func describeActionError(_ error: Error, for action: InflightAction) -> String {
-        let verb: String = {
-            switch action {
-            case .tidyNow:         return "Tidy"
-            case .applyApproved:   return "Apply"
-            case .applyProposal:   return "Apply"
-            case .reviewDraft:     return "Review"
+    private func endInflight(_ action: InflightAction) {
+        inflight.remove(action)
+        inflightStartedAt.removeValue(forKey: action)
+    }
+
+    private func elapsed(since start: Date) -> TimeInterval {
+        Date().timeIntervalSince(start)
+    }
+
+    private func errorMessage(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+
+    /// NSLog with a stable `[CompostAction]` prefix so the demo box can grep
+    /// for action timing without enabling Debug-level unified logging.
+    private func logAction(_ name: String, phase: String, elapsed: TimeInterval? = nil, detail: String? = nil) {
+        if let elapsed {
+            let ms = Int(elapsed * 1000)
+            if let detail {
+                NSLog("[CompostAction] %@ %@ in %dms: %@", name, phase, ms, detail)
+            } else {
+                NSLog("[CompostAction] %@ %@ in %dms", name, phase, ms)
             }
-        }()
-        let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-        return "\(verb) failed: \(detail)"
+        } else {
+            NSLog("[CompostAction] %@ %@", name, phase)
+        }
+    }
+
+    private func flashSuccess(_ ping: SuccessPing) {
+        lastSuccess = ping
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            if self?.lastSuccess == ping { self?.lastSuccess = nil }
+        }
+    }
+
+    private func scheduleClear(_ keyPath: ReferenceWritableKeyPath<NotchManager, String?>, after seconds: Double) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            self?[keyPath: keyPath] = nil
+        }
+    }
+
+    /// Fire-and-forget poller refresh so action methods can return as soon
+    /// as the tool call resolves — the spinner doesn't wait on the 4-DB
+    /// re-fetch.
+    private func scheduleBackgroundRefresh() {
+        Task { @MainActor [weak self] in
+            await self?.poller.refreshNow()
+        }
+    }
+
+    private func markDraftResolved(_ draftId: String) async {
+        guard !draftId.isEmpty else { return }
+        resolvedDraftIds.insert(draftId)
+        UserDefaults.standard.set(Array(resolvedDraftIds), forKey: Self.resolvedDraftIdsKey)
+        await republishVisible(triggerAutoGreet: false)
+    }
+
+    private func markProposalResolved(_ proposalId: String) async {
+        guard !proposalId.isEmpty else { return }
+        resolvedProposalIds.insert(proposalId)
+        UserDefaults.standard.set(Array(resolvedProposalIds), forKey: Self.resolvedProposalIdsKey)
+        await republishVisible(triggerAutoGreet: false)
     }
 
     private func expand() async {

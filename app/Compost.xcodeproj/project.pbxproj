@@ -365,6 +365,7 @@
 				<string>FR013</string>
 				<string>FR018</string>
 				<string>FR019</string>
+				<string>FR020</string>
 			</array>
 			<key>name</key>
 			<string>Views</string>
@@ -422,6 +423,7 @@
 				<string>BF015</string>
 				<string>BF016</string>
 				<string>BF017</string>
+				<string>BF018</string>
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<integer>0</integer>
@@ -711,6 +713,24 @@
 			<string>PBXBuildFile</string>
 			<key>fileRef</key>
 			<string>FR019</string>
+		</dict>
+		<key>FR020</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>LongActionHint.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF018</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR020</string>
 		</dict>
 	</dict>
 	<key>rootObject</key>
