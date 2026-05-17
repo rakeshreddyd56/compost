@@ -54,7 +54,10 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
       const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
       const notion = notionClient(context);
       const demoChanges = demoFlagEnabled("SLEEP_ON_IT_FORCE_FIRE")
-        ? await demoFrozenDraftChanges(notion)
+        ? [
+            ...(await demoAuditDraftExpiryChanges(notion)),
+            ...(await demoFrozenDraftChanges(notion)),
+          ]
         : [];
 
       if (!isMorningReviewWindow(tz)) return { changes: demoChanges, hasMore: false };
@@ -489,6 +492,10 @@ async function demoFrozenDraftChanges(notion: any): Promise<any[]> {
     const title = pageTitle(page);
     const draftId = sha1(`${page.id}|${new Date().toISOString().slice(0, 10)}`);
     const rewrite = await calmRewrite(original, title);
+    if (!rewrite.trim() || normalizeForComparison(rewrite) === normalizeForComparison(original)) {
+      console.warn(`sleep demo skipped no-op rewrite for ${page.id}`);
+      continue;
+    }
     changes.push({
       type: "upsert" as const,
       key: draftId,
@@ -506,6 +513,36 @@ async function demoFrozenDraftChanges(notion: any): Promise<any[]> {
     await pace();
   }
   return changes;
+}
+
+async function demoAuditDraftExpiryChanges(notion: any): Promise<any[]> {
+  const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
+  if (!FROZEN_DS) return [];
+
+  let res: any;
+  try {
+    res = await withRetryOn429(() => notion.dataSources.query({
+      data_source_id: FROZEN_DS,
+      filter: {
+        and: [
+          { property: "Status", select: { equals: "frozen" } },
+          { property: "Title", title: { contains: "[!audit]" } },
+        ],
+      },
+    }));
+  } catch (e: any) {
+    if (isNotionObjectNotFound(e)) return [];
+    throw e;
+  }
+
+  return res.results
+    .map((row: any) => readText(row, "Draft ID"))
+    .filter(Boolean)
+    .map((draftId: string) => ({
+      type: "upsert" as const,
+      key: draftId,
+      properties: { Status: Builder.select("expired") },
+    }));
 }
 
 async function findSleepDemoSources(notion: any): Promise<any[]> {
@@ -528,7 +565,13 @@ async function findSleepDemoSources(notion: any): Promise<any[]> {
 }
 
 function isSleepDemoSource(page: any): boolean {
-  return /\[!sleep\]|demo late-night draft/i.test(pageTitle(page));
+  const title = pageTitle(page);
+  if (/^\s*\[!audit\]/i.test(title)) return false;
+  return /\[!sleep\]|demo late-night draft/i.test(title);
+}
+
+function normalizeForComparison(text: string): string {
+  return String(text).trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function extractBlockText(block: any): string {
