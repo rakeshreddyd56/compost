@@ -91,7 +91,19 @@ final class NotionClient {
                 ["property": "Applied",  "checkbox": ["equals": false]],
             ]
         ])
-        return pages.compactMap(Proposal.init)
+        let proposals = pages.compactMap(Proposal.init)
+        var visible: [Proposal] = []
+        for proposal in proposals {
+            guard !proposal.targetPageId.isEmpty else {
+                visible.append(proposal)
+                continue
+            }
+            if try await isPageArchivedOrMissing(proposal.targetPageId) {
+                continue
+            }
+            visible.append(proposal)
+        }
+        return visible
     }
 
     func fetchReadyDrafts() async throws -> [FrozenDraft] {
@@ -177,15 +189,26 @@ final class NotionClient {
 
         if task.terminationStatus != 0 {
             let body = String(data: data, encoding: .utf8) ?? ""
-            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            let reason = trimmed.isEmpty
-                ? "ntn workers exec \(toolName) exited \(task.terminationStatus)"
-                : "ntn \(toolName) failed: \(String(trimmed.prefix(160)))"
-            throw NotionError.toolFailed(reason)
+            throw NotionError.toolFailed(
+                Self.describeCliFailure(body, toolName: toolName, status: task.terminationStatus)
+            )
         }
 
         try Self.validateToolResponse(data)
         return data
+    }
+
+    private func isPageArchivedOrMissing(_ pageId: String) async throws -> Bool {
+        var req = authed(base.appendingPathComponent("pages/\(pageId)"))
+        req.httpMethod = "GET"
+        let (data, resp) = try await sendWithRetry(req)
+        guard let http = resp as? HTTPURLResponse else { throw NotionError.httpStatus(-1, "no response") }
+        if http.statusCode == 404 { return true }
+        guard http.statusCode == 200 else {
+            throw NotionError.httpStatus(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        let decoded = try JSONDecoder().decode(NotionPage.self, from: data)
+        return decoded.archived == true
     }
 
     /// Resolve the `ntn` CLI binary by trying, in order:
@@ -225,9 +248,9 @@ final class NotionClient {
     /// are considered successful by virtue of a zero exit / 200 response.
     private static func validateToolResponse(_ data: Data) throws {
         // ntn sometimes prefixes JSON with diagnostic lines — pull the last
-        // JSON-looking line if the whole blob isn't directly parseable.
+        // full JSON object if the whole blob isn't directly parseable.
         let parsed: Any? = (try? JSONSerialization.jsonObject(with: data))
-            ?? jsonObjectFromLastLine(of: data)
+            ?? jsonObjectFromLastObject(of: data)
         guard let dict = parsed as? [String: Any] else { return }
         if let ok = dict["ok"] as? Bool, ok == false {
             let err = (dict["error"] as? String) ?? "tool reported ok=false"
@@ -235,16 +258,51 @@ final class NotionClient {
         }
     }
 
-    private static func jsonObjectFromLastLine(of data: Data) -> Any? {
+    private static func describeCliFailure(_ body: String, toolName: String, status: Int32) -> String {
+        let clean = body
+            .replacingOccurrences(
+                of: "\u{001B}\\[[0-9;]*m",
+                with: "",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            return "ntn workers exec \(toolName) exited \(status)"
+        }
+
+        if clean.contains("Cannot modify read-only property") {
+            return "Worker could not stamp the managed Notion row because Notion keeps it read-only. The action may have completed; refresh and retry."
+        }
+
+        if let errorRange = clean.range(of: "Error: ") {
+            let detail = clean[errorRange.upperBound...]
+                .split(whereSeparator: \.isNewline)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let detail, !detail.isEmpty {
+                return detail
+            }
+        }
+
+        let firstLine = clean
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)
+            ?? clean
+        return "ntn \(toolName) failed: \(String(firstLine.prefix(160)))"
+    }
+
+    private static func jsonObjectFromLastObject(of data: Data) -> Any? {
         guard let s = String(data: data, encoding: .utf8) else { return nil }
-        let lines = s.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .reversed()
-        for line in lines where line.first == "{" {
-            if let d = line.data(using: .utf8),
+        var searchEnd = s.endIndex
+        while let range = s.range(of: "{", options: .backwards, range: s.startIndex..<searchEnd) {
+            let candidate = String(s[range.lowerBound...])
+            if let d = candidate.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: d) {
                 return obj
             }
+            searchEnd = range.lowerBound
         }
         return nil
     }

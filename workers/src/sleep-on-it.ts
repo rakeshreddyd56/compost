@@ -18,6 +18,7 @@ import { isLateNight, isMorningReviewWindow } from "./utils/time";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 import { notionClient } from "./utils/notion-auth";
 import { demoFlagEnabled } from "./utils/demo-mode";
+import { createAuditPage } from "./utils/audit";
 
 class WebhookVerificationError extends Error {}
 
@@ -139,13 +140,16 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
         try {
           await assertSafeSleepTarget(notion, sourcePageId);
           await replacePageContent(notion, sourcePageId, rewrite);
-          await stampDraft(notion, row.id, { status: "approved", error: null });
+          await createSleepAudit(notion, row, "approved", "Source page replaced with calmer rewrite.");
+          await tryStampDraft(notion, row.id, { status: "approved", error: null });
         } catch (e: any) {
-          await stampDraft(notion, row.id, { status: "error", error: shortError(e) });
+          await createSleepAudit(notion, row, "failed", shortError(e));
+          await tryStampDraft(notion, row.id, { status: "error", error: shortError(e) });
           return { ok: false, error: shortError(e) };
         }
       } else {
-        await stampDraft(notion, row.id, { status: "rejected", error: null });
+        await createSleepAudit(notion, row, "rejected", "Source page left unchanged.");
+        await tryStampDraft(notion, row.id, { status: "rejected", error: null });
       }
       return { ok: true, error: null };
     },
@@ -356,6 +360,33 @@ async function stampDraft(notion: any, pageId: string, fields: { status: string;
   if (fields.error === null) properties.Error = { rich_text: [] };
   else if (fields.error) properties.Error = richTextProp(fields.error);
   await notion.pages.update({ page_id: pageId, properties });
+}
+
+async function tryStampDraft(notion: any, pageId: string, fields: { status: string; error?: string | null }) {
+  try {
+    await stampDraft(notion, pageId, fields);
+  } catch (e: any) {
+    console.warn("draft row stamp skipped:", shortError(e));
+  }
+}
+
+async function createSleepAudit(notion: any, row: any, decision: "approved" | "rejected" | "failed", detail: string) {
+  const draftId = readText(row, "Draft ID");
+  const sourcePageId = readText(row, "Source Page ID");
+  await createAuditPage(notion, {
+    title: `[!audit] Sleep-On-It ${decision} - ${pageTitle(row)}`,
+    lines: [
+      `Time: ${new Date().toISOString()}`,
+      `Decision: ${decision}`,
+      `Draft row ID: ${row.id}`,
+      `Draft ID: ${draftId || "(missing)"}`,
+      `Source Page ID: ${sourcePageId || "(missing)"}`,
+      `Result: ${detail}`,
+      decision === "approved"
+        ? "Safety: source page was explicitly marked as a Sleep-On-It demo page."
+        : "Safety: reject/failure path does not replace source content.",
+    ],
+  });
 }
 
 async function assertSafeSleepTarget(notion: any, pageId: string) {
