@@ -190,6 +190,20 @@ struct CueCard: Identifiable {
             .filter { !$0.isEmpty }
     }
 
+    /// "12m" / "1h 5m" / "2d 4h" — never bare 3-digit minute counts.
+    static func formatMinutes(_ m: Int) -> String {
+        let total = max(0, m)
+        if total < 60 { return "\(total)m" }
+        if total < 60 * 24 {
+            let h = total / 60
+            let r = total % 60
+            return r == 0 ? "\(h)h" : "\(h)h \(r)m"
+        }
+        let d = total / (60 * 24)
+        let h = (total % (60 * 24)) / 60
+        return h == 0 ? "\(d)d" : "\(d)d \(h)h"
+    }
+
     /// Pretty "10:30 AM" for the time strip; empty when no currentTime.
     func currentTimeLabel(now: Date = Date()) -> String {
         guard let currentTime else { return "" }

@@ -57,12 +57,12 @@ struct DraftRow: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GardenStyle.card.opacity(isHovering ? 1.6 : 1.0))
-        .cornerRadius(GardenStyle.cardCornerRadius)
+        .background(isHovering ? GardenStyle.cardHi : GardenStyle.card)
         .overlay(
             RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius)
-                .stroke(inlineError != nil ? Color.red.opacity(0.5) : Color.clear, lineWidth: 1)
+                .strokeBorder(inlineError != nil ? GardenStyle.accentRose.opacity(0.5) : GardenStyle.hair, lineWidth: 0.5)
         )
+        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius))
         .onAppear { if activeTone.isEmpty { activeTone = draft.activeTone } }
         .onHover { hovering in
             if GardenStyle.reduceMotion { isHovering = hovering }
@@ -79,17 +79,17 @@ struct DraftRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(draft.title)
                     .font(.system(.callout, design: .rounded).weight(.semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(GardenStyle.ink)
                     .lineLimit(1)
                 if !draft.frozenAt.isEmpty {
                     Text("frozen \(prettyTime(draft.frozenAt))")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(GardenStyle.ink3)
                 }
             }
             Spacer()
             Text("🌙 SLEEP-ON-IT")
-                .font(.caption2.weight(.bold))
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .tracking(1)
                 .foregroundColor(GardenStyle.sage300)
         }
@@ -130,16 +130,18 @@ struct DraftRow: View {
             if empty {
                 Text("—")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(GardenStyle.ink3)
             } else {
                 ScrollView {
                     body
-                        .font(.caption)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(GardenStyle.ink2)
+                        .lineSpacing(1.5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
                 .frame(maxHeight: 120)
+                .scrollContentBackground(.hidden)
             }
         }
         .padding(10)
@@ -149,7 +151,7 @@ struct DraftRow: View {
             RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
                 .strokeBorder(border, lineWidth: 0.5)
         )
-        .cornerRadius(GardenStyle.cornerRadius)
+        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cornerRadius))
     }
 
     // MARK: - Tone picker
@@ -158,7 +160,7 @@ struct DraftRow: View {
         HStack(spacing: 6) {
             Text("Tone")
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(GardenStyle.ink3)
             ForEach(tones, id: \.self) { t in
                 tonePill(t)
             }
@@ -188,14 +190,12 @@ struct DraftRow: View {
                     .font(.caption2.weight(.medium))
                     .foregroundColor(toneColor(active: isActive, hasRewrite: hasRewrite))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 10)
             .padding(.vertical, 3)
-            .background(toneBg(active: isActive, hasRewrite: hasRewrite))
+            .background(Capsule().fill(toneBg(active: isActive, hasRewrite: hasRewrite)))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(toneBorder(active: isActive, hasRewrite: hasRewrite), lineWidth: 0.5)
+                Capsule().strokeBorder(toneBorder(active: isActive, hasRewrite: hasRewrite), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
             .opacity(disabled ? 0.5 : 1.0)
         }
         .buttonStyle(.plain)
@@ -237,13 +237,13 @@ struct DraftRow: View {
     private func ghostButton(_ label: String, busy: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                if busy { ProgressView().controlSize(.mini) }
-                Text(label).font(.caption.weight(.medium))
+                if busy { ProgressView().controlSize(.mini).tint(GardenStyle.ink) }
+                Text(label).font(.system(size: 12, weight: .medium, design: .rounded))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.15))
-            .cornerRadius(GardenStyle.cornerRadius)
+            .foregroundColor(GardenStyle.ink)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
             .opacity(busy ? 0.7 : 1.0)
         }
         .buttonStyle(.plain)
@@ -255,13 +255,12 @@ struct DraftRow: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 if busy { ProgressView().controlSize(.mini).tint(.white) }
-                Text(label).font(.caption.weight(.semibold))
+                Text(label).font(.system(size: 12, weight: .semibold, design: .rounded))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
             .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
+            .background(Capsule().fill(GardenStyle.accentGreen))
             .opacity(busy ? 0.85 : 1.0)
         }
         .buttonStyle(.plain)
@@ -275,16 +274,16 @@ struct DraftRow: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption2)
-                .foregroundColor(.red)
+                .foregroundColor(GardenStyle.accentRose)
                 .padding(.top, 1)
             Text(err)
                 .font(.caption2)
-                .foregroundColor(.primary)
+                .foregroundColor(GardenStyle.ink2)
                 .lineLimit(3)
             Spacer()
         }
         .padding(8)
-        .background(Color.red.opacity(0.08))
+        .background(GardenStyle.accentRose.opacity(0.10))
         .cornerRadius(GardenStyle.cornerRadius)
         .accessibilityLabel("Review failed: \(err)")
     }

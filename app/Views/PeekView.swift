@@ -1,23 +1,23 @@
 //
 //  PeekView.swift
-//  Compost — collapsed notch badge capsule
+//  Compost — collapsed peek capsule on the dark notch surface.
 //
 
 import SwiftUI
 
 struct PeekView: View {
     let badge: Int
-    let imminentCue: Bool   // true when Cue's "minutesUntilNext" < 10 — pulses the leaf
-    let offline: Bool       // true when the last poll failed
+    let imminentCue: Bool
+    let offline: Bool
 
     @State private var pulse: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "leaf.fill")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.green)
+                    .foregroundColor(GardenStyle.sage400)
                     .scaleEffect(pulse ? 1.15 : 1.0)
                     .animation(
                         imminentCue && !GardenStyle.reduceMotion
@@ -27,7 +27,7 @@ struct PeekView: View {
                     )
                 if offline {
                     Circle()
-                        .fill(Color.yellow)
+                        .fill(GardenStyle.accentAmber)
                         .frame(width: 5, height: 5)
                         .offset(x: 3, y: -2)
                         .accessibilityHidden(true)
@@ -35,11 +35,15 @@ struct PeekView: View {
             }
             Text("\(badge)")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(GardenStyle.ink)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(GardenStyle.peekBackground))
+        .padding(.horizontal, GardenStyle.peekPadH)
+        .padding(.vertical, GardenStyle.peekPadV)
+        .background(Capsule().fill(GardenStyle.notchBg))
+        .overlay(
+            Capsule().strokeBorder(GardenStyle.hair, lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.45), radius: 12, y: 4)
         .accessibilityLabel(label)
         .onAppear { if imminentCue { pulse.toggle() } }
         .onChange(of: imminentCue) { on in pulse = on }

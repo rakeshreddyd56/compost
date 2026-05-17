@@ -1,6 +1,6 @@
 //
 //  ProposalRow.swift
-//  Compost — Gardener proposal row with per-row expand + Approve & apply
+//  Compost — 🪴 Gardener proposal row, dark notch surface.
 //
 
 import SwiftUI
@@ -14,7 +14,6 @@ struct ProposalRow: View {
     private var busy: Bool {
         manager.inflight.contains(.applyProposal(proposal.proposalId))
     }
-
     private var inlineError: String? {
         manager.proposalErrors[proposal.proposalId]
     }
@@ -27,19 +26,19 @@ struct ProposalRow: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.gray.opacity(isHovering ? 0.10 : 0.06))
-        .cornerRadius(GardenStyle.cornerRadius)
+        .background(isHovering ? GardenStyle.cardHi : GardenStyle.card)
         .overlay(
-            RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
-                .stroke(inlineError != nil ? Color.red.opacity(0.5) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius)
+                .strokeBorder(inlineError != nil ? GardenStyle.accentRose.opacity(0.5) : GardenStyle.hair, lineWidth: 0.5)
         )
-        .onHover { hovering in isHovering = hovering }
+        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius))
+        .onHover { isHovering = $0 }
         .animation(GardenStyle.spring, value: isExpanded)
         .animation(GardenStyle.spring, value: inlineError)
         .accessibilityElement(children: .contain)
     }
 
-    // MARK: - Header (always visible)
+    // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -47,12 +46,12 @@ struct ProposalRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(proposal.title)
                     .font(.system(.callout, design: .rounded).weight(.semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(GardenStyle.ink)
                     .lineLimit(1)
                 if !proposal.reason.isEmpty {
                     Text(proposal.reason)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(GardenStyle.ink3)
                         .lineLimit(isExpanded ? nil : 2)
                 }
             }
@@ -68,18 +67,25 @@ struct ProposalRow: View {
     private var disclosureChevron: some View {
         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
             .font(.caption2.weight(.semibold))
-            .foregroundColor(.secondary.opacity(isHovering ? 1 : 0.6))
+            .foregroundColor(GardenStyle.ink3)
     }
 
-    // MARK: - Expanded body
+    // MARK: - Expanded body — only render rows that actually have data
 
     private var expandedDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
-            detailRow(label: "Action",       value: proposal.action.replacingOccurrences(of: "_", with: " ").capitalized)
-            detailRow(label: "Reason",       value: proposal.reason.isEmpty ? "—" : proposal.reason, multiline: true)
-            if !proposal.targetPageId.isEmpty { notionLinkRow }
-            detailRow(label: "Proposal ID",  value: proposal.proposalId.isEmpty ? "—" : proposal.proposalId, mono: true)
-
+            if !proposal.action.isEmpty {
+                detailRow(label: "Action", value: proposal.action.replacingOccurrences(of: "_", with: " ").capitalized)
+            }
+            if !proposal.reason.isEmpty {
+                detailRow(label: "Reason", value: proposal.reason, multiline: true)
+            }
+            if !proposal.targetPageId.isEmpty {
+                notionLinkRow
+            }
+            if !proposal.proposalId.isEmpty {
+                detailRow(label: "ID", value: proposal.proposalId, mono: true)
+            }
             HStack(spacing: 8) {
                 approveApplyButton
                 Spacer()
@@ -87,7 +93,7 @@ struct ProposalRow: View {
             .padding(.top, 2)
         }
         .padding(.top, 4)
-        .padding(.leading, 28)  // align with title (past the glyph)
+        .padding(.leading, 28)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
@@ -95,11 +101,11 @@ struct ProposalRow: View {
         HStack(alignment: .top, spacing: 6) {
             Text(label)
                 .font(.caption2.weight(.semibold))
-                .foregroundColor(.secondary)
-                .frame(width: 80, alignment: .leading)
+                .foregroundColor(GardenStyle.ink3)
+                .frame(width: 60, alignment: .leading)
             Text(value)
                 .font(mono ? .system(.caption2, design: .monospaced) : .caption)
-                .foregroundColor(.primary)
+                .foregroundColor(GardenStyle.ink2)
                 .lineLimit(multiline ? nil : 1)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -110,8 +116,8 @@ struct ProposalRow: View {
         HStack(alignment: .top, spacing: 6) {
             Text("Target")
                 .font(.caption2.weight(.semibold))
-                .foregroundColor(.secondary)
-                .frame(width: 80, alignment: .leading)
+                .foregroundColor(GardenStyle.ink3)
+                .frame(width: 60, alignment: .leading)
             Button(action: openInNotion) {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.up.right.square")
@@ -120,7 +126,7 @@ struct ProposalRow: View {
                         .font(.caption)
                         .underline()
                 }
-                .foregroundColor(GardenStyle.accentGreen)
+                .foregroundColor(GardenStyle.sage300)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open target page in Notion")
@@ -141,11 +147,10 @@ struct ProposalRow: View {
                 Text(busy ? "Applying…" : "Approve & apply")
                     .font(.caption.weight(.semibold))
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
+            .background(Capsule().fill(GardenStyle.accentGreen))
             .opacity(busy ? 0.85 : 1.0)
         }
         .buttonStyle(.plain)
@@ -160,16 +165,16 @@ struct ProposalRow: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption2)
-                .foregroundColor(.red)
+                .foregroundColor(GardenStyle.accentRose)
                 .padding(.top, 1)
             Text(err)
                 .font(.caption2)
-                .foregroundColor(.primary)
+                .foregroundColor(GardenStyle.ink2)
                 .lineLimit(3)
             Spacer()
         }
         .padding(8)
-        .background(Color.red.opacity(0.08))
+        .background(GardenStyle.accentRose.opacity(0.10))
         .cornerRadius(GardenStyle.cornerRadius)
         .accessibilityLabel("Apply failed: \(err)")
     }
@@ -179,12 +184,12 @@ struct ProposalRow: View {
     private var actionGlyph: some View {
         let (system, tint): (String, Color) = {
             switch proposal.action.lowercased() {
-            case "archive":      return ("archivebox", .orange)
-            case "merge":        return ("arrow.triangle.merge", .blue)
-            case "fix_link":     return ("link", .purple)
-            case "add_tag":      return ("tag", .pink)
-            case "delete_stub":  return ("trash", .red)
-            default:             return ("leaf", GardenStyle.accentGreen)
+            case "archive":      return ("archivebox", GardenStyle.accentAmber)
+            case "merge":        return ("arrow.triangle.merge", GardenStyle.sage400)
+            case "fix_link":     return ("link", GardenStyle.sage300)
+            case "add_tag":      return ("tag", GardenStyle.accentRose)
+            case "delete_stub":  return ("trash", GardenStyle.accentRose)
+            default:             return ("leaf", GardenStyle.sage400)
             }
         }()
         return Image(systemName: system)
@@ -199,25 +204,4 @@ struct ProposalRow: View {
         guard !notionId.isEmpty, let url = URL(string: "notion://www.notion.so/\(notionId)") else { return }
         NSWorkspace.shared.open(url)
     }
-}
-
-struct PressableButtonStyle: ButtonStyle {
-    @Binding var isPressed: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .onChange(of: configuration.isPressed) { pressed in isPressed = pressed }
-    }
-}
-
-#Preview {
-    let mockPage = NotionPage(
-        id: "123",
-        properties: [:],
-        last_edited_time: nil,
-        archived: false
-    )
-    return ProposalRow(
-        proposal: Proposal(mockPage)!,
-        manager: NotchManager.preview
-    )
 }

@@ -44,9 +44,10 @@ struct MemorySection: View {
     private var header: some View {
         Button { withAnimation(GardenStyle.spring) { collapsed.toggle() } } label: {
             HStack(spacing: 6) {
-                Text("🧠 Memory")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(GardenStyle.ink2)
+                Text("🧠 MEMORY")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .tracking(1)
+                    .foregroundColor(GardenStyle.sage300)
                 Text("· \(manager.summary.memoryCount)")
                     .font(.caption2)
                     .foregroundColor(GardenStyle.ink3)

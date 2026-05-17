@@ -2,15 +2,7 @@
 //  ExpandedView.swift
 //  Compost — expanded notch card.
 //
-//  Order in v0.5:
-//   1. ☀ Up next (cue)
-//   2. 🪴 Tidy (proposals)
-//   3. 🌙 Drafts on ice
-//   4. 🧠 Memory (notionMemory rows)   ← new in v0.5
-//   5. 📰 Sunday digest
-//
-//  The Photos slideshow is presented in place of `content` when the user
-//  taps "Open photos slideshow" inside the Memory section.
+//  v0.5 shell: deep notchBg (#050608), translucent inner cards, pill buttons.
 //
 
 import SwiftUI
@@ -40,22 +32,30 @@ struct ExpandedView: View {
     // MARK: - Standard summary card
 
     private var summaryCard: some View {
-        VStack(spacing: GardenStyle.sectionGap) {
+        VStack(spacing: GardenStyle.expandedInnerGap) {
             header
             topPip
-            Divider()
             ScrollView {
                 content
                     .padding(.horizontal, GardenStyle.cardPadding)
                     .padding(.bottom, GardenStyle.cardPadding)
             }
-            .frame(maxHeight: 380)
+            .frame(maxHeight: 420)
+            .scrollContentBackground(.hidden)
         }
         .frame(width: GardenStyle.expandedWidth)
-        .padding(.top, GardenStyle.cardPadding)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+        .padding(.top, 14)
+        .background(GardenStyle.notchBg)
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: GardenStyle.expandedR,
+                bottomTrailingRadius: GardenStyle.expandedR,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+        )
+        .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
     }
 
     // MARK: - Top pip
@@ -63,18 +63,18 @@ struct ExpandedView: View {
     @ViewBuilder
     private var topPip: some View {
         if let success = manager.lastSuccess {
-            pip(icon: "checkmark.circle.fill", tint: GardenStyle.accentGreen,
+            pip(icon: "checkmark.circle.fill", tint: GardenStyle.sage300,
                 text: successMessage(success))
         } else if let actionErr = manager.lastActionError {
-            pip(icon: "exclamationmark.triangle.fill", tint: .red, text: actionErr, secondary: false)
+            pip(icon: "exclamationmark.triangle.fill", tint: GardenStyle.accentRose, text: actionErr)
         } else if let err = manager.summary.lastError {
-            pip(icon: "wifi.exclamationmark", tint: .yellow, text: err, secondary: true)
+            pip(icon: "wifi.exclamationmark", tint: GardenStyle.accentAmber, text: err, secondary: true)
         } else if !manager.hasLoadedOnce {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).tint(GardenStyle.ink3)
                 Text("Checking your workspace…")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(GardenStyle.ink3)
                 Spacer()
             }
             .padding(.horizontal, GardenStyle.cardPadding)
@@ -88,7 +88,7 @@ struct ExpandedView: View {
                 .foregroundColor(tint)
             Text(text)
                 .font(.caption.weight(.medium))
-                .foregroundColor(secondary ? .secondary : .primary)
+                .foregroundColor(secondary ? GardenStyle.ink3 : GardenStyle.ink2)
                 .lineLimit(2)
             Spacer()
         }
@@ -136,7 +136,7 @@ struct ExpandedView: View {
                     if manager.summary.proposalCount > 5 {
                         Text("+ \(manager.summary.proposalCount - 5) more")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(GardenStyle.ink3)
                     }
                 }
 
@@ -159,12 +159,12 @@ struct ExpandedView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "newspaper")
                             Text("Open this week's digest")
-                                .font(.callout)
+                                .font(.callout.weight(.semibold))
                         }
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .foregroundColor(GardenStyle.accentGreen)
-                        .overlay(RoundedRectangle(cornerRadius: GardenStyle.cornerRadius).stroke(GardenStyle.accentGreen, lineWidth: 1))
+                        .foregroundColor(.white)
+                        .background(Capsule().fill(GardenStyle.accentGreen))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open weekly digest in Notion")
@@ -173,9 +173,6 @@ struct ExpandedView: View {
         }
     }
 
-    /// Whether the Memory DB ID is configured. When it's not, the section is
-    /// hidden entirely (no empty card flooding the UI for users who haven't
-    /// opted into the memory flow yet).
     private var hasMemoryDb: Bool {
         !(Keychain.get(.notionMemoryDbId) ?? "").isEmpty
     }
@@ -185,10 +182,10 @@ struct ExpandedView: View {
     private var loadingState: some View {
         VStack(spacing: 12) {
             Mascot(size: 56, mood: .calm)
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.small).tint(GardenStyle.sage300)
             Text("Compost is checking on your workspace…")
                 .font(.callout)
-                .foregroundColor(.secondary)
+                .foregroundColor(GardenStyle.ink2)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
@@ -201,9 +198,10 @@ struct ExpandedView: View {
             Mascot(size: 64, mood: .calm)
             Text("Your workspace is calm.")
                 .font(.system(.callout, design: .rounded).weight(.semibold))
+                .foregroundColor(GardenStyle.ink)
             Text("Nothing to tidy. ✨")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(GardenStyle.ink3)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 22)
@@ -218,19 +216,24 @@ struct ExpandedView: View {
             Mascot(size: 22, mood: mascotMood)
             Text(greeting)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
-                .foregroundColor(.primary)
+                .foregroundColor(GardenStyle.ink)
             Spacer()
             tidyButton
-            Button(action: { Task { await manager.toggle() } }) {
-                Image(systemName: "xmark")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(4)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close")
+            closeButton
         }
         .padding(.horizontal, GardenStyle.cardPadding)
+    }
+
+    private var closeButton: some View {
+        Button { Task { await manager.toggle() } } label: {
+            Image(systemName: "xmark")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(GardenStyle.ink2)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(GardenStyle.card))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close")
     }
 
     private var tidyButton: some View {
@@ -244,11 +247,10 @@ struct ExpandedView: View {
                 }
                 Text(busy ? "Refreshing…" : "Refresh").font(.caption.weight(.semibold))
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .foregroundColor(.white)
-            .background(GardenStyle.accentGreen)
-            .cornerRadius(GardenStyle.cornerRadius)
+            .background(Capsule().fill(GardenStyle.accentGreen))
             .opacity(busy ? 0.85 : 1.0)
         }
         .buttonStyle(.plain)
@@ -261,8 +263,9 @@ struct ExpandedView: View {
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundColor(.secondary)
+            .font(.caption2.weight(.bold))
+            .tracking(0.8)
+            .foregroundColor(GardenStyle.sage300)
             .padding(.top, 4)
     }
 

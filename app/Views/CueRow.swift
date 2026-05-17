@@ -1,13 +1,6 @@
 //
 //  CueRow.swift
-//  Compost — ☀ Up next prep card driven by cueCards rows.
-//
-//  v0.5 refactor: the row is now a structured prep card.
-//   • Hero time strip (current time + minutes-until-next pill)
-//   • Calm rephrasing line from cueCards.Calm Cue
-//   • Local prep checklist parsed from cueCards.Current Bullets
-//     (toggles are local-only — we never write back to Notion from here)
-//   • Action row: Open in Notion · Snooze 5m
+//  Compost — ☀ Up next prep card on the dark notch surface.
 //
 
 import SwiftUI
@@ -21,15 +14,12 @@ struct CueRow: View {
 
     private var isImminent: Bool { cue.minutesUntilNext > 0 && cue.minutesUntilNext < 10 }
     private var isCritical: Bool { cue.minutesUntilNext > 0 && cue.minutesUntilNext < 5 }
-
-    private var displayMinutes: Int {
-        max(0, cue.minutesUntilNext + snoozedMinutes)
-    }
+    private var displayMinutes: Int { max(0, cue.minutesUntilNext + snoozedMinutes) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             eyebrow
-            timeStrip
+            titleRow
             if !cue.calmCue.isEmpty { bodyLine }
             if !cue.bulletItems.isEmpty { checklist }
             actionRow
@@ -37,22 +27,22 @@ struct CueRow: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GardenStyle.accentGreen.opacity(0.10))
-        .cornerRadius(GardenStyle.cardCornerRadius)
+        .background(GardenStyle.card)
         .overlay(
             RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius)
-                .strokeBorder(isImminent ? GardenStyle.accentAmber.opacity(0.4) : Color.clear, lineWidth: 1)
+                .strokeBorder(isImminent ? GardenStyle.accentAmber.opacity(0.4) : GardenStyle.hair, lineWidth: 0.5)
         )
+        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Up next: \(cue.currentHeading.isEmpty ? cue.sourceTitle : cue.currentHeading)")
     }
 
-    // MARK: - Eyebrow + title
+    // MARK: - Eyebrow
 
     private var eyebrow: some View {
         HStack(spacing: 6) {
             Text("☀ UP NEXT")
-                .font(.caption2.weight(.bold))
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .tracking(1)
                 .foregroundColor(GardenStyle.sage300)
             if !cue.currentTimeLabel().isEmpty {
@@ -64,54 +54,54 @@ struct CueRow: View {
         }
     }
 
-    // MARK: - Time strip
+    // MARK: - Title + countdown
 
-    private var timeStrip: some View {
+    private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(cue.currentHeading.isEmpty ? cue.sourceTitle : cue.currentHeading)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
-                .foregroundColor(.primary)
+                .foregroundColor(GardenStyle.ink)
                 .lineLimit(1)
             Spacer()
-            if cue.minutesUntilNext > 0 {
+            if cue.minutesUntilNext > 0 || snoozedMinutes > 0 {
                 countdownPill
             }
         }
     }
 
     private var countdownPill: some View {
-        let label = snoozedMinutes > 0
-            ? "in \(displayMinutes)m (snoozed +\(snoozedMinutes))"
-            : "in \(displayMinutes)m"
+        let pretty = CueCard.formatMinutes(displayMinutes)
+        let label = snoozedMinutes > 0 ? "in \(pretty) (snoozed +\(snoozedMinutes)m)" : "in \(pretty)"
         return Text(label)
             .font(.caption2.weight(.semibold).monospacedDigit())
             .foregroundColor(isImminent ? GardenStyle.accentAmber : GardenStyle.sage300)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(
-                Capsule().fill((isImminent ? GardenStyle.accentAmber : GardenStyle.sage400).opacity(0.18))
+                Capsule().fill((isImminent ? GardenStyle.accentAmber : GardenStyle.sage400).opacity(0.16))
             )
             .overlay(
                 Capsule().strokeBorder(
-                    (isImminent ? GardenStyle.accentAmber : GardenStyle.sage400).opacity(0.30),
+                    (isImminent ? GardenStyle.accentAmber : GardenStyle.sage400).opacity(0.32),
                     lineWidth: 0.5
                 )
             )
             .modifier(PulseScaleModifier(active: isCritical))
-            .accessibilityLabel("In \(displayMinutes) minutes")
+            .accessibilityLabel("In \(pretty)")
     }
 
     // MARK: - Body line
 
     private var bodyLine: some View {
         Text(cue.calmCue)
-            .font(.callout)
-            .foregroundColor(.primary.opacity(0.85))
+            .font(.system(size: 12.5, weight: .regular))
+            .foregroundColor(GardenStyle.ink2)
+            .lineSpacing(1.5)
             .lineLimit(3)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Prep checklist (local-only state)
+    // MARK: - Prep checklist
 
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -141,20 +131,21 @@ struct CueRow: View {
                             .foregroundColor(.white)
                     }
                 }
-                .padding(.top, 2)
+                .padding(.top, 3)
                 Text(item)
-                    .font(.caption)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(isChecked ? GardenStyle.ink3 : GardenStyle.ink2)
                     .strikethrough(isChecked, color: GardenStyle.ink4)
-                    .foregroundColor(isChecked ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Prep: \(item)")
         .accessibilityHint(isChecked ? "Checked, tap to uncheck" : "Tap to mark done")
     }
 
-    // MARK: - Action row
+    // MARK: - Actions (pill-shaped)
 
     private var actionRow: some View {
         HStack(spacing: GardenStyle.actionRowGap) {
@@ -170,12 +161,11 @@ struct CueRow: View {
     private func actionPill(label: String, primary: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundColor(primary ? .white : .primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(primary ? GardenStyle.accentGreen : Color.secondary.opacity(0.15))
-                .cornerRadius(GardenStyle.cornerRadius)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundColor(primary ? .white : GardenStyle.ink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(primary ? GardenStyle.accentGreen : Color.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
     }
@@ -189,27 +179,33 @@ struct CueRow: View {
                     .labelStyle(.titleAndIcon)
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(GardenStyle.sage300)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(GardenStyle.sage400.opacity(0.14))
-                    .clipShape(Capsule())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(GardenStyle.sage400.opacity(0.14)))
             }
             Spacer()
-            Text("[!cue] · \(cue.sourceTitle)")
-                .font(.caption2)
-                .foregroundColor(GardenStyle.ink3)
-                .lineLimit(1)
+            if !cleanSource.isEmpty {
+                Text("[!cue] · \(cleanSource)")
+                    .font(.caption2)
+                    .foregroundColor(GardenStyle.ink3)
+                    .lineLimit(1)
+            }
         }
     }
 
-    /// True when the cue's source page title matches the agent's bridge page
-    /// convention, so we can attribute the briefing to the Workspace Steward.
+    /// Strip the user-visible "[!cue]" marker so the meta row reads
+    /// "[!cue] · Agent Briefing Inbox" instead of the duplicated
+    /// "[!cue] · [!cue] Agent Briefing Inbox" we used to see.
+    private var cleanSource: String {
+        cue.sourceTitle
+            .replacingOccurrences(of: "[!cue]", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     private var isFromAgentInbox: Bool {
         let t = cue.sourceTitle.lowercased()
         return t.contains("agent briefing inbox") || t.contains("[!cue]")
     }
-
-    // MARK: - Open source
 
     private func openSource() {
         let id = cue.sourcePageId.replacingOccurrences(of: "-", with: "")

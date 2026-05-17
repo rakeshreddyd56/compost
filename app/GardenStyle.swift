@@ -20,7 +20,7 @@ enum GardenStyle {
     static let spacing: CGFloat = 6
     static let rowGap: CGFloat = 8
     static let sectionGap: CGFloat = 12
-    static let expandedWidth: CGFloat = 380
+    static let expandedWidth: CGFloat = 440   // matches prototype .size-expanded
 
     static var spring: Animation {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
