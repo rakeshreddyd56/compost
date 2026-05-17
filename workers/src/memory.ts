@@ -46,11 +46,7 @@ export function registerMemory(worker: any, dbs: { notionMemory: any; embeddings
     execute: async (_state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("memoryIngest"); return emptySync(); }
       const notion = notionClient(context);
-      const records = await buildMemoryRecords(notion);
-      await archiveLiveNonItemRows(notion);
-      await upsertLiveMemoryRows(notion, records);
-      await archiveRowsWithMissingSources(notion);
-      await archiveDuplicateLiveRows(notion);
+      const records = await runMemoryIngest(notion);
       return {
         changes: records.map(memoryChange),
         hasMore: false,
@@ -81,6 +77,20 @@ export function registerMemory(worker: any, dbs: { notionMemory: any; embeddings
       return { items: await recallMemory(notionClient(context), { query, limit, since }) };
     },
   });
+}
+
+export async function ingestMemoryNow(notion: any): Promise<{ records: number; errors: number }> {
+  const records = await runMemoryIngest(notion);
+  return { records: records.length, errors: 0 };
+}
+
+async function runMemoryIngest(notion: any): Promise<MemoryRecord[]> {
+  const records = await buildMemoryRecords(notion);
+  await archiveLiveNonItemRows(notion);
+  await upsertLiveMemoryRows(notion, records);
+  await archiveRowsWithMissingSources(notion);
+  await archiveDuplicateLiveRows(notion);
+  return records;
 }
 
 async function buildMemoryRecords(notion: any): Promise<MemoryRecord[]> {

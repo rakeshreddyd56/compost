@@ -17,6 +17,7 @@ import { registerGardener }   from "./gardener.js";
 import { registerSleepOnIt }  from "./sleep-on-it.js";
 import { registerCue }        from "./cue.js";
 import { registerMemory }     from "./memory.js";
+import { registerVoice }      from "./voice.js";
 // import { registerWeekly }  from "./weekly.js";  // STRETCH
 import { registerTools }      from "./tools.js";
 
@@ -64,6 +65,12 @@ export const frozenDrafts = worker.database("frozenDrafts", {
       "Original Snapshot": Schema.richText(),
       "Original":       Schema.richText(),
       "Rewrite":        Schema.richText(),
+      "Rewrite Variants": Schema.richText(),
+      "Active Tone":    Schema.select([
+        { name: "calmer" },
+        { name: "crisp" },
+        { name: "diplomatic" },
+      ]),
       "Status":         Schema.select([
         { name: "pending" },
         { name: "frozen" },
@@ -152,6 +159,7 @@ registerGardener(worker, { compostPile, embeddingsCache, pacer: notionPacer });
 registerSleepOnIt(worker, { frozenDrafts, pacer: notionPacer });
 registerCue(worker, { cueCards, pacer: notionPacer });
 registerMemory(worker, { notionMemory, embeddingsCache, pacer: notionPacer });
+registerVoice(worker);
 // registerWeekly(worker, { weeklySnapshots, weeklyDigests, pacer: notionPacer });  // STRETCH
 registerTools(worker, { compostPile, frozenDrafts });
 

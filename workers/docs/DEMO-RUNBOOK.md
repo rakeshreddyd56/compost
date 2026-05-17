@@ -253,3 +253,26 @@ page body. Then ask the Compost Worker memoryIngest sync/tool to refresh Notion
 Memory if available. Do not create duplicate Notion Memory rows manually unless
 the Worker is unavailable.
 ```
+
+```text
+Ask the Compost Worker refreshBridge tool with { "surface": "all" }. Treat
+memoryRecords and tidyProposals as immediate refreshes. Treat the Cue note as
+expected: Cue Cards are managed by the 5-minute cue sync after [!cue] Agent
+Briefing Inbox is updated.
+```
+
+```text
+Ask the Compost Worker voiceReply tool with:
+{ "transcript": "<what I said>", "mode": "memory", "context": "Memory section is visible in the notch." }
+Use the reply as the actual text-to-speech response. Do not invent a spoken
+answer if the tool returns ok=false.
+```
+
+```text
+Ask the Compost Worker rephraseDraft tool with:
+{ "draftId": "<Draft ID or draft row page id>", "tone": "crisp" }
+or:
+{ "draftId": "<Draft ID or draft row page id>", "tone": "diplomatic" }
+Only use the returned rewrite. reviewDraft approve remains the separate action
+that mutates the safe [!sleep] source page.
+```

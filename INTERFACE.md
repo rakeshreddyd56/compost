@@ -140,6 +140,60 @@ Returns recent or relevant memory rows for Notion Custom Agents and future
 voice/recall surfaces. If embeddings are unavailable, recall falls back to
 lexical matching and recency.
 
+### `refreshBridge`
+```typescript
+input:  { surface: "cue" | "memory" | "tidy" | "all" }
+output: {
+  ok: boolean,
+  surface: "cue" | "memory" | "tidy" | "all",
+  cueCards: number,
+  memoryRecords: number,
+  tidyProposals: number,
+  notes: string[],
+  errors: string[]
+}
+```
+Agent-callable bridge refresh. `memory` runs the memory ingest path immediately.
+`tidy` refreshes Gardener proposals immediately. `cue` is Worker-sync managed:
+the agent should update `[!cue] Agent Briefing Inbox`, then the 5-minute `cue`
+sync publishes Cue Cards. This is intentional because Cue Cards are Worker-owned
+managed rows whose date fields are read-only to direct tool writes.
+
+### `rephraseDraft`
+```typescript
+input:  { draftId: string, tone: "calmer" | "crisp" | "diplomatic" }
+output: {
+  ok: boolean,
+  draftId: string,
+  tone: "calmer" | "crisp" | "diplomatic",
+  rewrite: string | null,
+  error: string | null
+}
+```
+Generates a real tone variant from the frozen draft's `Original` /
+`Original Snapshot`, stamps `Rewrite`, `Rewrite Variants`, and `Active Tone` on
+the draft row, and does not mutate the source page. `reviewDraft approve` still
+performs the actual source-page replacement.
+
+### `voiceReply`
+```typescript
+input:  {
+  transcript: string,
+  mode: "general" | "briefing" | "memory" | "draft" | null,
+  context: string | null
+}
+output: {
+  ok: boolean,
+  reply: string,
+  mode: "general" | "briefing" | "memory" | "draft",
+  usedMemory: boolean,
+  error: string | null
+}
+```
+Returns a real spoken response for the notch voice surface. For memory-like
+queries it calls `recallMemory` first, then produces a short reply. The app may
+feed this output to local text-to-speech.
+
 ## Notion Custom Agent bridge
 
 The Notion agent can use Mail, Calendar, Web, GitHub, Notion, and the Compost
@@ -167,7 +221,7 @@ The notch app should remain data-driven:
 | Tidy proposals | `compostPile` where `Approved=false` and `Applied=false` | `applyProposal({ proposalId })` |
 | Drafts on ice | `frozenDrafts` where `Status=frozen`, newest `Frozen At` first | `reviewDraft({ draftId, decision })` |
 | Memory | `notionMemory`, newest `Captured At` first | `recallMemory` for search/voice recall |
-| Read aloud / voice | currently app-native audio; future Worker payloads are text only | no Notion mutation unless user confirms |
+| Read aloud / voice | app-native audio + Worker reply text | `voiceReply({ transcript, mode, context })` |
 
 Design can change layout, hierarchy, animation, and visual treatment, but should
 not invent mock-only fields. Missing data should render as empty/error states,

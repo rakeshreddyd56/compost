@@ -157,6 +157,57 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
       return { ok: true, error: null };
     },
   });
+
+  worker.tool("rephraseDraft", {
+    title: "Rephrase a frozen draft",
+    description: "Generate a real tone variant for a frozen draft and stamp it on the draft row.",
+    schema: j.object({
+      draftId: j.string().describe("Draft row page id or stable Draft ID from frozenDrafts."),
+      tone: j.enum("calmer", "crisp", "diplomatic"),
+    }),
+    outputSchema: j.object({
+      ok: j.boolean(),
+      draftId: j.string(),
+      tone: j.enum("calmer", "crisp", "diplomatic"),
+      rewrite: j.string().nullable(),
+      error: j.string().nullable(),
+    }),
+    execute: async ({ draftId, tone }: any, context: any) => {
+      return rephraseDraft(notionClient(context), { draftId, tone });
+    },
+  });
+}
+
+export async function rephraseDraft(
+  notion: any,
+  input: { draftId: string; tone: "calmer" | "crisp" | "diplomatic" }
+): Promise<{ ok: boolean; draftId: string; tone: "calmer" | "crisp" | "diplomatic"; rewrite: string | null; error: string | null }> {
+  const draftId = String(input.draftId ?? "").trim();
+  const tone = input.tone;
+  const fail = (error: string) => ({ ok: false, draftId, tone, rewrite: null, error: shortError(error) });
+
+  const FROZEN_DS = process.env.FROZEN_DRAFTS_DATA_SOURCE_ID;
+  if (!FROZEN_DS) return fail("FROZEN_DRAFTS_DATA_SOURCE_ID not set");
+  if (!draftId) return fail("Missing draftId");
+
+  const row = await fetchDraftRow(notion, FROZEN_DS, draftId);
+  if (!row) return fail("draft not found");
+
+  const original = readText(row, "Original") || readText(row, "Original Snapshot");
+  if (!original.trim()) return fail("Original draft text is empty");
+
+  try {
+    const rewrite = tone === "calmer"
+      ? (readText(row, "Rewrite") || await rewriteWithTone(original, pageTitle(row), tone))
+      : await rewriteWithTone(original, pageTitle(row), tone);
+    await tryStampDraftTone(notion, row.id, tone, rewrite);
+    await createSleepAudit(notion, row, "approved", `Generated ${tone} tone variant; source page was not modified.`);
+    return { ok: true, draftId, tone, rewrite, error: null };
+  } catch (e: any) {
+    await createSleepAudit(notion, row, "failed", `Tone generation failed: ${shortError(e)}`);
+    await tryStampDraft(notion, row.id, { status: "error", error: shortError(e) });
+    return fail(e);
+  }
 }
 
 // ---------------- handlers ----------------
@@ -253,6 +304,51 @@ ${markdown}`;
   }
 }
 
+async function rewriteWithTone(markdown: string, title: string, tone: "calmer" | "crisp" | "diplomatic"): Promise<string> {
+  if (tone === "calmer") return calmRewrite(markdown, title);
+  if (!process.env.ANTHROPIC_API_KEY) return fallbackToneRewrite(markdown, tone);
+
+  const toneRules: Record<"calmer" | "crisp" | "diplomatic", string> = {
+    calmer: "soften the tone while preserving substance",
+    crisp: "make it shorter, clearer, and more direct while preserving substance",
+    diplomatic: "make it tactful, collaborative, and relationship-preserving while preserving substance",
+  };
+
+  const prompt = `Rewrite this draft in a ${tone} tone: ${toneRules[tone]}.
+
+Rules:
+- Preserve facts, names, numbers, links, and structure.
+- Do not invent new commitments or remove important caveats.
+- Keep markdown.
+- Output only the rewritten markdown.
+
+Title: ${title}
+
+Original:
+${markdown}`;
+
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: Math.min(4096, Math.max(800, markdown.length * 2)),
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!r.ok) return fallbackToneRewrite(markdown, tone);
+    const json: any = await r.json();
+    return json.content?.[0]?.text?.trim() || fallbackToneRewrite(markdown, tone);
+  } catch {
+    return fallbackToneRewrite(markdown, tone);
+  }
+}
+
 function fallbackRewrite(markdown: string): string {
   return markdown
     .replace(/\bI AM ABSOLUTELY CERTAIN\b/gi, "I am concerned")
@@ -260,6 +356,13 @@ function fallbackRewrite(markdown: string): string {
     .replace(/\bIMMEDIATELY\b/g, "soon")
     .replace(/\bALWAYS\b/g, "often")
     .replace(/\bNEVER\b/g, "rarely");
+}
+
+function fallbackToneRewrite(markdown: string, tone: "crisp" | "diplomatic" | "calmer"): string {
+  const calm = fallbackRewrite(markdown);
+  if (tone === "diplomatic") return calm.replace(/\bwe need to\b/gi, "it may help to").replace(/\bmust\b/gi, "should");
+  if (tone === "crisp") return calm.split("\n").map((line) => line.trim()).filter(Boolean).join("\n");
+  return calm;
 }
 
 // ---------------- DB helpers (skeletons — flesh out using @notionhq/client patterns) ----------------
@@ -370,6 +473,23 @@ async function tryStampDraft(notion: any, pageId: string, fields: { status: stri
     await stampDraft(notion, pageId, fields);
   } catch (e: any) {
     console.warn("draft row stamp skipped:", shortError(e));
+  }
+}
+
+async function tryStampDraftTone(notion: any, pageId: string, tone: string, rewrite: string) {
+  try {
+    const variants = JSON.stringify({ [tone]: rewrite });
+    await notion.pages.update({
+      page_id: pageId,
+      properties: {
+        Rewrite: richTextProp(rewrite),
+        "Rewrite Variants": richTextProp(variants),
+        "Active Tone": { select: { name: tone } },
+        Error: { rich_text: [] },
+      },
+    });
+  } catch (e: any) {
+    console.warn("draft tone stamp skipped:", shortError(e));
   }
 }
 
