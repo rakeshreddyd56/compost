@@ -175,6 +175,10 @@ cd workers
 npm run demo:reset
 ```
 
+The reset restores the safe `[!sleep]` demo source back to a loud original,
+clears local app resolved-row caches, and then retriggers the demo syncs so the
+notch has fresh, visible actions again.
+
 ## Run The App
 
 ```bash
