@@ -14,25 +14,31 @@ enum VoiceStage: Equatable {
     case idle
     case listening
     case transcribing
-    case finished(String)
+    case replying          // voiceReply Worker tool in-flight
+    case speaking(String)  // TTS playing the worker reply
+    case finished(String)  // either transcript-only (legacy) or reply done
+    case replyFailed(String)
     case failed(String)
 
     var label: String {
         switch self {
-        case .idle:             return "Idle"
-        case .listening:        return "Listening"
-        case .transcribing:     return "Transcribing"
-        case .finished:         return "Transcript ready"
-        case .failed:           return "Capture failed"
+        case .idle:         return "Idle"
+        case .listening:    return "Listening"
+        case .transcribing: return "Transcribing"
+        case .replying:     return "Thinking"
+        case .speaking:     return "Speaking"
+        case .finished:     return "Done"
+        case .replyFailed:  return "Reply failed"
+        case .failed:       return "Capture failed"
         }
     }
 
     var dotColor: Color {
         switch self {
-        case .idle, .finished:  return GardenStyle.sage400
-        case .listening:        return GardenStyle.accentRose
-        case .transcribing:     return GardenStyle.accentAmber
-        case .failed:           return GardenStyle.accentRose
+        case .idle, .finished, .speaking: return GardenStyle.sage400
+        case .listening:                   return GardenStyle.accentRose
+        case .transcribing, .replying:     return GardenStyle.accentAmber
+        case .failed, .replyFailed:        return GardenStyle.accentRose
         }
     }
 }
@@ -41,18 +47,16 @@ struct VoiceView: View {
     @ObservedObject var manager: NotchManager
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 14) {
-                mascotSlot
-                VStack(alignment: .leading, spacing: 10) {
-                    stagePill
-                    transcript
-                    waveform
-                    quickActions
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(alignment: .top, spacing: 14) {
+            mascotSlot
+            VStack(alignment: .leading, spacing: 10) {
+                stagePill
+                transcript
+                waveform
+                replyPane
+                quickActions
             }
-            replyDisclosure
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, GardenStyle.cardPadding)
         .padding(.vertical, 14)
@@ -63,19 +67,80 @@ struct VoiceView: View {
         .accessibilityLabel("Voice mode, \(manager.voiceStage.label)")
     }
 
-    /// Honest footer: voice is transcript-only until a Worker / LLM reply
-    /// route is wired (see INTERFACE.md "voice assistant reply" gap).
-    private var replyDisclosure: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "info.circle")
-                .font(.caption2)
-            Text("Reply unavailable — assistant route not yet wired.")
-                .font(.caption2)
-            Spacer()
+    /// Reply pane — surfaces voiceReply progress + the actual Worker reply.
+    /// Hidden during pure listening; appears once the transcript is in.
+    @ViewBuilder
+    private var replyPane: some View {
+        switch manager.voiceStage {
+        case .replying:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).tint(GardenStyle.sage300)
+                Text("Compost is thinking…")
+                    .font(.caption)
+                    .foregroundColor(GardenStyle.ink2)
+                Spacer()
+            }
+            .padding(8)
+            .background(GardenStyle.card)
+            .cornerRadius(GardenStyle.cornerRadius)
+
+        case .speaking(let reply), .finished(let reply) where reply == manager.voiceReply && !manager.voiceReply.isEmpty:
+            replyBubble(text: reply, speaking: { if case .speaking = manager.voiceStage { return true } else { return false } }())
+
+        case .replyFailed(let err):
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundColor(GardenStyle.accentRose)
+                Text(err)
+                    .font(.caption2)
+                    .foregroundColor(GardenStyle.ink2)
+                    .lineLimit(3)
+                Spacer()
+            }
+            .padding(8)
+            .background(GardenStyle.accentRose.opacity(0.08))
+            .cornerRadius(GardenStyle.cornerRadius)
+
+        default:
+            EmptyView()
         }
-        .foregroundColor(GardenStyle.ink3)
-        .padding(.top, 2)
-        .padding(.leading, 124)
+    }
+
+    private func replyBubble(text: String, speaking: Bool) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: speaking ? "speaker.wave.2.fill" : "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(GardenStyle.sage300)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(GardenStyle.ink)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !manager.voiceMode.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("mode: \(manager.voiceMode)")
+                            .font(.caption2)
+                            .foregroundColor(GardenStyle.ink3)
+                        if manager.voiceUsedMemory {
+                            Text("· memory used")
+                                .font(.caption2)
+                                .foregroundColor(GardenStyle.accentGold)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(GardenStyle.sage400.opacity(0.12))
+        .overlay(
+            RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
+                .strokeBorder(GardenStyle.sage400.opacity(0.30), lineWidth: 0.5)
+        )
+        .cornerRadius(GardenStyle.cornerRadius)
+        .accessibilityLabel("Compost reply: \(text)")
     }
 
     // MARK: - Mascot with sage halo
@@ -99,11 +164,12 @@ struct VoiceView: View {
 
     private var mascotMood: Mascot.Mood {
         switch manager.voiceStage {
-        case .listening:    return .calm
-        case .transcribing: return .calm
-        case .finished:     return .nudging
-        case .failed:       return .alert
-        case .idle:         return .calm
+        case .listening, .transcribing, .replying, .idle:
+            return .calm
+        case .speaking, .finished:
+            return .nudging
+        case .failed, .replyFailed:
+            return .alert
         }
     }
 
@@ -114,7 +180,7 @@ struct VoiceView: View {
             Circle()
                 .fill(manager.voiceStage.dotColor)
                 .frame(width: 7, height: 7)
-                .modifier(PulseModifier(active: manager.voiceStage == .listening || manager.voiceStage == .transcribing))
+                .modifier(PulseModifier(active: isStageBusy(manager.voiceStage)))
             Text(manager.voiceStage.label.uppercased())
                 .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .tracking(1)
@@ -135,6 +201,7 @@ struct VoiceView: View {
             Text("Hold ⌥⌘V anywhere to talk.")
                 .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundColor(GardenStyle.ink2)
+
         case .listening:
             Text(manager.voiceTranscript.isEmpty
                  ? "listening…"
@@ -143,17 +210,22 @@ struct VoiceView: View {
                 .foregroundColor(GardenStyle.ink)
                 .italic(manager.voiceTranscript.isEmpty)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
         case .transcribing:
             Text("transcribing…")
                 .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundColor(GardenStyle.ink3)
                 .italic()
-        case .finished(let text):
-            Text(text.isEmpty ? "(no speech detected)" : text)
-                .font(.system(size: 15, weight: .regular, design: .rounded))
-                .foregroundColor(GardenStyle.ink)
+
+        case .replying, .speaking, .finished, .replyFailed:
+            // Once we have the transcript, keep it visible as the receipt
+            // for whatever the reply pane shows below.
+            Text(manager.voiceTranscript.isEmpty ? "(no speech detected)" : manager.voiceTranscript)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundColor(GardenStyle.ink2)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
         case .failed(let err):
             Text(err)
                 .font(.system(size: 14, weight: .regular, design: .rounded))
@@ -166,13 +238,30 @@ struct VoiceView: View {
 
     private var waveform: some View {
         Waveform(
-            active: manager.voiceStage == .listening || manager.voiceStage == .transcribing,
-            color: manager.voiceStage == .listening
-                ? GardenStyle.accentRose
-                : GardenStyle.sage400,
+            active: isStageBusy(manager.voiceStage),
+            color: waveformColor,
             amplitudeProvider: { manager.voiceAmplitude }
         )
         .frame(height: 26)
+    }
+
+    private var waveformColor: Color {
+        switch manager.voiceStage {
+        case .listening:           return GardenStyle.accentRose
+        case .transcribing, .replying: return GardenStyle.accentAmber
+        case .speaking:            return GardenStyle.sage400
+        default:                   return GardenStyle.sage400
+        }
+    }
+
+    /// True for any stage that should keep the waveform alive (mic input
+    /// or worker round-trip). Used by both the pulse modifier and the
+    /// waveform's active flag.
+    private func isStageBusy(_ stage: VoiceStage) -> Bool {
+        switch stage {
+        case .listening, .transcribing, .replying, .speaking: return true
+        default: return false
+        }
     }
 
     // MARK: - Quick actions (router into other surfaces)

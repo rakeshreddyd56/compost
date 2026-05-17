@@ -64,8 +64,12 @@ struct FrozenDraft: Identifiable {
     /// When the v0.5 worker tool `rephraseDraft` lands and writes a
     /// `Rewrite Variants` JSON blob, this dictionary will grow without any
     /// schema change on the app side.
-    let rewrites: [String: String]
-    let activeTone: String
+    /// Mutable so NotchManager.rephraseDraft can drop a fresh tone variant
+    /// into the row without rebuilding the whole summary. Worker is still the
+    /// source of truth on the next poll; this is just the in-flight optimistic
+    /// update so the diff pane swaps instantly.
+    var rewrites: [String: String]
+    var activeTone: String
     let frozenAt: String
 
     /// Back-compat: existing callers still read `.rewrite`. Returns the

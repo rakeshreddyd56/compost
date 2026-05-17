@@ -29,6 +29,15 @@ struct DraftRow: View {
     private var rewriteForActive: String {
         draft.rewrites[activeTone] ?? draft.rewrite
     }
+    private func isRephrasing(_ tone: String) -> Bool {
+        manager.inflight.contains(.rephraseDraft(draft.id, tone.lowercased()))
+    }
+    private var anyRephraseInflight: Bool {
+        manager.inflight.contains(where: {
+            if case .rephraseDraft(let id, _) = $0 { return id == draft.id }
+            return false
+        })
+    }
     private var tones: [String] {
         // Always show the canonical three so the picker is recognisable
         // even when only Calmer has a real rewrite. Extras (anything outside
@@ -160,43 +169,54 @@ struct DraftRow: View {
     private func tonePill(_ tone: String) -> some View {
         let isActive = tone == activeTone
         let hasRewrite = draft.rewrites[tone]?.isEmpty == false
+        let busyHere = isRephrasing(tone)
+        let disabled = anyRephraseInflight && !busyHere
         return Button {
-            guard hasRewrite else { return }
-            activeTone = tone
+            if hasRewrite {
+                activeTone = tone
+            } else {
+                Task { await manager.rephraseDraft(draft, displayTone: tone) }
+            }
         } label: {
-            Text(tone)
-                .font(.caption2.weight(.medium))
-                .foregroundColor(toneColor(active: isActive, hasRewrite: hasRewrite))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(toneBg(active: isActive, hasRewrite: hasRewrite))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(toneBorder(active: isActive, hasRewrite: hasRewrite), lineWidth: 0.5)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            HStack(spacing: 4) {
+                if busyHere {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(GardenStyle.sage300)
+                }
+                Text(tone)
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(toneColor(active: isActive, hasRewrite: hasRewrite))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(toneBg(active: isActive, hasRewrite: hasRewrite))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(toneBorder(active: isActive, hasRewrite: hasRewrite), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .opacity(disabled ? 0.5 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled(!hasRewrite)
+        .disabled(disabled)
         .help(hasRewrite
               ? "Show the \(tone) rewrite"
-              : "Requires rephraseDraft worker.")
-        .accessibilityLabel("Tone \(tone), \(isActive ? "selected" : (hasRewrite ? "available" : "unavailable"))")
+              : "Tap to request the \(tone) rewrite (calls rephraseDraft).")
+        .accessibilityLabel("Tone \(tone), \(isActive ? "selected" : (hasRewrite ? "available" : "request rewrite"))")
     }
 
     private func toneColor(active: Bool, hasRewrite: Bool) -> Color {
-        if !hasRewrite { return GardenStyle.ink4 }
         if active      { return GardenStyle.sage300 }
-        return GardenStyle.ink2
+        if hasRewrite  { return GardenStyle.ink2 }
+        return GardenStyle.ink3
     }
     private func toneBg(active: Bool, hasRewrite: Bool) -> Color {
-        if !hasRewrite { return GardenStyle.card }
         if active      { return GardenStyle.sage400.opacity(0.20) }
         return GardenStyle.card
     }
     private func toneBorder(active: Bool, hasRewrite: Bool) -> Color {
         if active      { return GardenStyle.sage400.opacity(0.40) }
-        if !hasRewrite { return GardenStyle.hair }
         return GardenStyle.hair
     }
 

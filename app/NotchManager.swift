@@ -26,6 +26,7 @@ enum InflightAction: Hashable {
     case reviewDraft(String)
     case voiceCapture
     case tagMemory(String)       // memory item id
+    case rephraseDraft(String, String) // (draftId, lowercase tone)
 }
 
 /// One-shot success ping consumed by the view layer to flash a brief "✓ done"
@@ -70,6 +71,9 @@ final class NotchManager: ObservableObject {
     @Published private(set) var surface: NotchSurface = .summary
     @Published private(set) var voiceStage: VoiceStage = .idle
     @Published private(set) var voiceTranscript: String = ""
+    @Published private(set) var voiceReply: String = ""
+    @Published private(set) var voiceMode: String = ""     // "general" | "briefing" | "memory" | "draft"
+    @Published private(set) var voiceUsedMemory: Bool = false
     @Published private(set) var voiceAmplitude: Float = 0
 
     let notion: NotionClient
@@ -158,11 +162,12 @@ final class NotchManager: ObservableObject {
                 // Long max — we'll cut it short when the user releases the key.
                 let text = try await self.voice.transcribe(maxDuration: 8.0)
                 await MainActor.run {
-                    self.voiceStage = .finished(text)
                     self.voiceTranscript = text
                     self.lastSuccess = .voiceCaptured(text)
+                    self.voiceStage = .replying
                 }
                 NSLog("[CompostAction] voiceCapture success: %@", text)
+                await self.requestVoiceReply(for: text)
             } catch {
                 let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
                 await MainActor.run { self.voiceStage = .failed(msg) }
@@ -170,6 +175,165 @@ final class NotchManager: ObservableObject {
             }
             await MainActor.run { self.voiceAmplitude = 0 }
         }
+    }
+
+    /// Call the Worker `voiceReply` tool with the recognised transcript +
+    /// a compact summary snapshot, then speak the response via the local
+    /// TTS. We pass `mode=nil` so the Worker picks the right mode itself.
+    private func requestVoiceReply(for transcript: String) async {
+        guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else {
+            await MainActor.run { self.voiceStage = .finished(transcript) }
+            return
+        }
+        let payload: [String: Any] = [
+            "transcript": transcript,
+            "mode": NSNull(),
+            "context": compactSummaryContext(),
+        ]
+        do {
+            let data = try await notion.invokeTool("voiceReply", input: payload)
+            let parsed = try Self.parseVoiceReply(data)
+            await MainActor.run {
+                self.voiceReply = parsed.reply
+                self.voiceMode = parsed.mode
+                self.voiceUsedMemory = parsed.usedMemory
+                self.voiceStage = .speaking(parsed.reply)
+            }
+            // Speak the reply via the local Apple TTS. We swallow speak errors
+            // since the user has the transcript on screen either way.
+            try? await voice.speak(text: parsed.reply)
+            await MainActor.run {
+                if case .speaking = self.voiceStage {
+                    self.voiceStage = .finished(parsed.reply)
+                }
+            }
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            await MainActor.run { self.voiceStage = .replyFailed(msg) }
+            NSLog("[CompostAction] voiceReply failed: %@", msg)
+        }
+    }
+
+    /// Compact, secret-free summary blob passed as `context` to the Worker.
+    /// Single string per the contract; counts + the current cue headline
+    /// only, so the Worker can ground the reply without us leaking row IDs
+    /// or full draft bodies.
+    private func compactSummaryContext() -> String {
+        var parts: [String] = []
+        if let cue = summary.currentCue {
+            let head = cue.currentHeading.isEmpty ? cue.sourceTitle : cue.currentHeading
+            parts.append("cue=\(head) in \(cue.minutesUntilNext)m")
+        }
+        parts.append("tidy=\(summary.proposalCount)")
+        parts.append("drafts=\(summary.draftCount)")
+        parts.append("memory=\(summary.memoryCount)")
+        return parts.joined(separator: "; ")
+    }
+
+    private struct VoiceReplyResult {
+        let ok: Bool
+        let reply: String
+        let mode: String
+        let usedMemory: Bool
+    }
+
+    private static func parseVoiceReply(_ data: Data) throws -> VoiceReplyResult {
+        // ntn CLI sometimes prepends diagnostics; pull the last JSON object.
+        let raw: Any? = (try? JSONSerialization.jsonObject(with: data))
+            ?? jsonObjectFromTail(data)
+        guard let dict = raw as? [String: Any] else {
+            throw NotionError.toolFailed("voiceReply: malformed response")
+        }
+        let ok = (dict["ok"] as? Bool) ?? false
+        if !ok {
+            throw NotionError.toolFailed((dict["error"] as? String) ?? "voiceReply returned ok=false")
+        }
+        guard let reply = dict["reply"] as? String, !reply.isEmpty else {
+            throw NotionError.toolFailed("voiceReply: empty reply")
+        }
+        return VoiceReplyResult(
+            ok: true,
+            reply: reply,
+            mode: (dict["mode"] as? String) ?? "general",
+            usedMemory: (dict["usedMemory"] as? Bool) ?? false
+        )
+    }
+
+    private static func jsonObjectFromTail(_ data: Data) -> Any? {
+        guard let s = String(data: data, encoding: .utf8) else { return nil }
+        var searchEnd = s.endIndex
+        while let r = s.range(of: "{", options: .backwards, range: s.startIndex..<searchEnd) {
+            let candidate = String(s[r.lowerBound...])
+            if let d = candidate.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: d) {
+                return obj
+            }
+            searchEnd = r.lowerBound
+        }
+        return nil
+    }
+
+    /// Call the Worker `rephraseDraft` tool. Maps the UI's capitalised
+    /// tone name to the lowercase contract value, drops the returned rewrite
+    /// into the visible summary so the diff pane swaps instantly.
+    func rephraseDraft(_ draft: FrozenDraft, displayTone: String) async {
+        let lower = displayTone.lowercased()
+        let action = InflightAction.rephraseDraft(draft.id, lower)
+        draftErrors.removeValue(forKey: draft.id)
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+
+        do {
+            let data = try await notion.invokeTool("rephraseDraft", input: [
+                "draftId": draft.id,
+                "tone": lower,
+            ])
+            let parsed = try Self.parseRephrase(data)
+            applyRephrase(draftId: draft.id, displayTone: displayTone, rewrite: parsed)
+            NSLog("[CompostAction] rephraseDraft[%@/%@] success", draft.id, lower)
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            draftErrors[draft.id] = msg
+            NSLog("[CompostAction] rephraseDraft[%@/%@] failed: %@", draft.id, lower, msg)
+        }
+    }
+
+    private static func parseRephrase(_ data: Data) throws -> String {
+        let raw: Any? = (try? JSONSerialization.jsonObject(with: data))
+            ?? jsonObjectFromTail(data)
+        guard let dict = raw as? [String: Any] else {
+            throw NotionError.toolFailed("rephraseDraft: malformed response")
+        }
+        let ok = (dict["ok"] as? Bool) ?? false
+        if !ok {
+            throw NotionError.toolFailed((dict["error"] as? String) ?? "rephraseDraft returned ok=false")
+        }
+        guard let rewrite = dict["rewrite"] as? String, !rewrite.isEmpty else {
+            throw NotionError.toolFailed("rephraseDraft: empty rewrite")
+        }
+        return rewrite
+    }
+
+    /// Optimistic local update so the UI swaps immediately. The next
+    /// poll will re-read the canonical Worker-managed properties.
+    private func applyRephrase(draftId: String, displayTone: String, rewrite: String) {
+        guard let idx = summary.drafts.firstIndex(where: { $0.id == draftId }) else { return }
+        var updated = summary.drafts
+        updated[idx].rewrites[displayTone] = rewrite
+        updated[idx].activeTone = displayTone
+        let visible = NotchSummary(
+            proposalCount: summary.proposalCount,
+            proposals: summary.proposals,
+            draftCount: updated.count,
+            drafts: updated,
+            digestReady: summary.digestReady,
+            digestUrl: summary.digestUrl,
+            currentCue: summary.currentCue,
+            memoryCount: summary.memoryCount,
+            memory: summary.memory,
+            lastError: summary.lastError
+        )
+        summary = visible
     }
 
     /// Push-to-talk end. The transcribe task is already running with its
@@ -462,6 +626,7 @@ final class NotchManager: ObservableObject {
             case .reviewDraft:     return "Review"
             case .voiceCapture:    return "Voice capture"
             case .tagMemory:       return "Tag memory"
+            case .rephraseDraft:   return "Rephrase"
             }
         }()
         let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
