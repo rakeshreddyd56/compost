@@ -26,6 +26,10 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Compost. All rights reserved.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Compost transcribes your voice notes into Notion memory while you hold ⌘⇧V.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Compost converts your voice notes to text on-device when possible.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

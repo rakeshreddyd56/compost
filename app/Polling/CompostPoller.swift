@@ -45,6 +45,7 @@ final class CompostPoller {
             let drafts = try await client.fetchReadyDrafts()
             let digest = try await client.latestWeeklyDigest()
             let cue = try await client.currentCueCard()
+            let memory = try await client.fetchRecentMemory()
 
             let summary = NotchSummary(
                 proposalCount: proposals.count,
@@ -54,6 +55,7 @@ final class CompostPoller {
                 digestReady: digest != nil,
                 digestUrl: digest?.url,
                 currentCue: cue,
+                memory: memory,
                 lastError: nil
             )
             cb(summary)
@@ -64,6 +66,7 @@ final class CompostPoller {
                 draftCount: 0, drafts: [],
                 digestReady: false, digestUrl: nil,
                 currentCue: nil,
+                memory: [],
                 lastError: describe(error)
             )
             cb(summary)

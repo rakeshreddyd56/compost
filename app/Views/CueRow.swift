@@ -17,6 +17,9 @@ struct CueRow: View {
                     .foregroundColor(.primary)
                     .lineLimit(1)
                 Spacer()
+                if !cue.calmCue.isEmpty {
+                    ReadAloudButton(text: cue.calmCue, id: "cue-\(cue.id)", manager: manager)
+                }
                 if cue.minutesUntilNext > 0 {
                     Text("next in \(cue.minutesUntilNext)m")
                         .font(.caption2.weight(.medium))

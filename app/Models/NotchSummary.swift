@@ -13,17 +13,18 @@ struct NotchSummary {
     let digestReady: Bool
     let digestUrl: URL?
     let currentCue: CueCard?
+    let memory: [MemoryItem]
     let lastError: String?  // non-nil means most recent poll failed
 
     var hasAnything: Bool {
-        proposalCount + draftCount + (digestReady ? 1 : 0) > 0
+        proposalCount + draftCount + memory.count + (digestReady ? 1 : 0) > 0
     }
 
     static let empty = NotchSummary(
         proposalCount: 0, proposals: [],
         draftCount: 0, drafts: [],
         digestReady: false, digestUrl: nil,
-        currentCue: nil, lastError: nil
+        currentCue: nil, memory: [], lastError: nil
     )
 }
 

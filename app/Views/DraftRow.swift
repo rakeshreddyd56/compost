@@ -83,9 +83,17 @@ struct DraftRow: View {
 
     private var calmerHero: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Calmer rewrite", systemImage: "leaf.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundColor(GardenStyle.accentGreen)
+            HStack {
+                Label("Calmer rewrite", systemImage: "leaf.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(GardenStyle.accentGreen)
+                Spacer()
+                if !draft.rewrite.isEmpty {
+                    ReadAloudButton(text: draft.rewrite,
+                                    id: "draft-\(draft.id)",
+                                    manager: manager)
+                }
+            }
             Text(draft.rewrite.isEmpty ? "—" : draft.rewrite)
                 .font(.callout)
                 .foregroundColor(.primary)

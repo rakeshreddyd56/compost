@@ -87,6 +87,38 @@
 
 - [x] [workers] **Implement `applyProposal` tool** per INTERFACE.md (single-row apply by `Proposal ID`). The Claude app calls this from per-row "Approve & apply" buttons on `claude/s11-per-proposal-apply`.
 
+### S15 worker handoff (paired with `claude/s15-agent-native`)
+
+The notch app on `claude/s15-agent-native` now polls the `notionMemory`
+managed DB and writes voice-captured pages into the user's memory parent.
+Until Codex ships the items below, the 🧠 Memory section silently stays
+empty (no app breakage) and voice-captured notes pile up as plain pages.
+
+- [ ] [workers] **Wire `notionMemory` managed DB** in `src/index.ts` —
+      database id `c7d4a833-f620-413f-be0e-7bc6d55b7a2c` already exists
+      in Notion at the Compost Demo Workspace parent. Schema per
+      INTERFACE.md.
+- [ ] [workers] **Ship `memoryIngest` sync** (backfill + delta) per
+      INTERFACE.md. Use the existing pacer skill. Walk pages tagged
+      `[!memory]` under Compost Demo Workspace. Caption photos via Claude
+      vision; embed notes via OpenAI `text-embedding-3-small` (reuse the
+      embedding cache table).
+- [ ] [workers] **Ship `recallMemory` tool** per INTERFACE.md. Custom
+      Agents call this; the app does NOT (it polls the DB directly).
+- [ ] [workers] (optional) **Tweak `tidyNow` for the Memory Curator agent**
+      — if the Memory Curator agent invokes a "surface this memory" path,
+      the agent will write directly to `cueCards` (existing schema) rather
+      than need a new tool. No changes required unless we add a
+      surface-memory tool later.
+
+User-side one-time work (no code from Codex or Claude needed):
+- Connect Gmail + Google Calendar in Notion. Walkthrough in
+  `docs/setup/notion-connectors.md`.
+- Paste the two Custom Agent configs into Notion's Custom Agent UI:
+  `docs/custom-agents/today-brief.md` and
+  `docs/custom-agents/memory-curator.md`. Both agents are configured to
+  write into existing `cueCards` (no new DB needed for the brief).
+
 ## 🔥 Current focus (post-S2, start S3)
 
 - [x] [workers] Add `applyProposal({ proposalId })` with safe-demo guard for per-row Notch apply

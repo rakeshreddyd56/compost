@@ -56,6 +56,22 @@
 | `Calm Cue` | rich_text | 1-2 line Claude-rephrased card |
 | `Generated At` | date | When this row was last written |
 
+### `notionMemory` — captured photo / note / clip events (new S15)
+Live data source. Already created in the workspace at
+`collection://47d8f26b-573c-4288-bee8-1a9fafbb174f` under the Compost Demo
+Workspace parent page. Database id `c7d4a833-f620-413f-be0e-7bc6d55b7a2c`.
+
+| Property | Type | Notes |
+|---|---|---|
+| `Title` | title | Usually the source page title. |
+| `Source Page ID` | rich_text | Notion page id this memory was extracted from. |
+| `Type` | select | `photo` \| `note` \| `clip`. |
+| `Content` | rich_text | For notes: raw text. For photos: external image URL. |
+| `Caption` | rich_text | Photos: Claude vision caption. Notes: short summary. |
+| `Captured At` | date | When the block was first seen by the ingest worker. |
+| `Tags` | multi_select | `idea` / `todo` / `reference` / `moment`. |
+| `Embedding ID` | rich_text | sha1 key into the workers embedding cache. |
+
 ## Worker tools (callable by app or Notion Custom Agents)
 
 ### `tidyNow`
@@ -103,6 +119,41 @@ output: { ok: boolean, error: string | null }
 `reject` is non-destructive and stamps `Status = rejected`. `approve` replaces
 the source page only when the source is explicitly marked safe for this demo with
 `[!sleep]` or demo-safe text in the title/body; otherwise it returns `ok=false`.
+
+### `recallMemory` (new S15)
+```typescript
+input:  { query?: string, limit?: number, since?: string /* ISO-8601 */ }
+output: { items: Array<{
+  id: string,
+  title: string,
+  type: "photo" | "note" | "clip",
+  caption: string,
+  capturedAt: string,
+  score?: number   // cosine similarity when query is set
+}> }
+```
+Called by Custom Agents (Memory Curator, Today Brief) to fetch the most
+relevant memory items. The macOS app does NOT call this — it polls the
+`notionMemory` DB directly for the 🧠 Memory section. Worker should:
+- Resolve `query` to embedding via OpenAI `text-embedding-3-small` (reuse
+  the existing embedding cache).
+- Cosine-rank rows against the query embedding; fall back to date-desc when
+  `query` is omitted.
+- Default `limit = 8`, max `limit = 25`.
+
+## Worker syncs (new S15)
+
+### `memoryIngest`
+- **Backfill** (`mode: "manual"`): walk the Compost Demo Workspace subtree
+  once, ingest all blocks under pages whose title contains `[!memory]`.
+- **Delta** (`mode: "incremental", schedule: "15m"`): walk new blocks since
+  the cursor; pacer budget 80 req / 30s (use the existing pacer pattern).
+- Per item:
+  - `image` block → upload-by-URL into the `notionMemory` row's `Content`,
+    caption via Claude vision into `Caption`, `Type = photo`.
+  - `paragraph` / `bulleted_list_item` block → write the text into
+    `Content`, embed via OpenAI `text-embedding-3-small` (cache key sha1 of
+    text → store key into `Embedding ID`), `Type = note`.
 
 ## Worker webhooks
 

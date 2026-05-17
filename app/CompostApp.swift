@@ -55,7 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 frozenDrafts: frozenDbId,
                 weeklyDigests: Keychain.get(.weeklyDigestsDbId) ?? "",
                 cueCards: Keychain.get(.cueCardsDbId) ?? "",
-                parentPage: parentId
+                notionMemory: Keychain.get(.notionMemoryDbId) ?? "",
+                parentPage: parentId,
+                memoryParentPage: Keychain.get(.memoryParentPageId) ?? ""
             )
         )
         let manager = NotchManager(notion: client)
@@ -94,6 +96,8 @@ struct SetupView: View {
     @State private var frozenDbId: String = Keychain.get(.frozenDraftsDbId) ?? ""
     @State private var weeklyDigestsDbId: String = Keychain.get(.weeklyDigestsDbId) ?? ""
     @State private var cueCardsDbId: String = Keychain.get(.cueCardsDbId) ?? ""
+    @State private var notionMemoryDbId: String = Keychain.get(.notionMemoryDbId) ?? ""
+    @State private var memoryParentPageId: String = Keychain.get(.memoryParentPageId) ?? ""
     @State private var trusted: Bool = HotkeyManager.isTrusted
 
     var body: some View {
@@ -109,6 +113,9 @@ struct SetupView: View {
                 TextField("frozenDrafts DB ID", text: $frozenDbId)
                 TextField("weeklyDigests DB ID (optional)", text: $weeklyDigestsDbId)
                 TextField("cueCards DB ID (optional)", text: $cueCardsDbId)
+                TextField("notionMemory DB ID (optional)", text: $notionMemoryDbId)
+                TextField("Memory parent page ID (optional, for voice capture)",
+                          text: $memoryParentPageId)
             }
             Section("Global hotkey ⌘⇧C") {
                 HStack {
@@ -132,6 +139,8 @@ struct SetupView: View {
                 Keychain.set(.frozenDraftsDbId, frozenDbId)
                 Keychain.set(.weeklyDigestsDbId, weeklyDigestsDbId)
                 Keychain.set(.cueCardsDbId, cueCardsDbId)
+                Keychain.set(.notionMemoryDbId, notionMemoryDbId)
+                Keychain.set(.memoryParentPageId, memoryParentPageId)
                 NSApp.terminate(nil)
             }
             .buttonStyle(.borderedProminent)

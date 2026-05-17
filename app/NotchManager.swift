@@ -24,6 +24,8 @@ enum InflightAction: Hashable {
     case applyApproved
     case applyProposal(String)   // per-proposal apply, keyed by proposalId
     case reviewDraft(String)
+    case readAloud(String)       // row id currently speaking
+    case captureVoice            // ⌘⇧V push-to-talk
 }
 
 /// One-shot success ping consumed by the view layer to flash a brief "✓ done"
@@ -33,6 +35,7 @@ enum SuccessPing: Equatable {
     case applied
     case proposalApplied(String) // payload = proposal title for the pip text
     case reviewed(String)
+    case voiceCaptured(String)   // payload = transcribed text preview
 }
 
 @MainActor
@@ -52,11 +55,20 @@ final class NotchManager: ObservableObject {
     /// (the Notion page id of the frozenDrafts row).
     @Published private(set) var draftErrors: [String: String] = [:]
 
+    /// Which row is currently reading aloud (CueRow / DraftRow / MemoryItem id).
+    /// View layer uses this to toggle the speaker icon between play/stop.
+    @Published private(set) var speakingId: String?
+    /// True while a push-to-talk voice capture is recording.
+    @Published private(set) var isCapturingVoice: Bool = false
+
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
     private let poller: CompostPoller
     private let wake: WakeTrigger
     private let hotkey: HotkeyManager
+    private let voice: VoiceClient = AppleVoiceClient()
+    private let recorder = AudioRecorder()
+    private let voiceHotkey = VoiceCaptureHotkey()
     private var hasAutoGreetedFirstLoad = false
     private static let resolvedDraftIdsKey = "compost.resolvedDraftIds"
     private var resolvedDraftIds: Set<String>
@@ -84,6 +96,120 @@ final class NotchManager: ObservableObject {
         hotkey.onPressed = { [weak self] in
             Task { await self?.toggle() }
         }
+        voiceHotkey.onPress = { [weak self] in
+            Task { await self?.beginVoiceCapture() }
+        }
+        voiceHotkey.onRelease = { [weak self] in
+            Task { await self?.endVoiceCapture() }
+        }
+    }
+
+    // MARK: - Voice (TTS + STT, Apple frameworks)
+
+    func readAloud(text: String, id: String) async {
+        guard !text.isEmpty else { return }
+        // Stop anything currently speaking — only one row at a time.
+        if speakingId != nil { voice.stop() }
+        speakingId = id
+        let action = InflightAction.readAloud(id)
+        inflight.insert(action)
+        let start = Date()
+        NSLog("[CompostAction] readAloud[%@] start", id)
+        do {
+            try await voice.speak(text: text)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            NSLog("[CompostAction] readAloud[%@] success in %dms", id, ms)
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            NSLog("[CompostAction] readAloud[%@] failed in %dms: %@", id, ms, msg)
+            lastActionError = "Read aloud failed: \(msg)"
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                if self?.lastActionError != nil { self?.lastActionError = nil }
+            }
+        }
+        if speakingId == id { speakingId = nil }
+        inflight.remove(action)
+    }
+
+    func stopReadAloud() {
+        voice.stop()
+        if let id = speakingId {
+            inflight.remove(.readAloud(id))
+        }
+        speakingId = nil
+    }
+
+    private func beginVoiceCapture() async {
+        // Don't double-start.
+        guard !isCapturingVoice else { return }
+        let allowed = await AudioRecorder.ensureMicrophonePermission()
+        guard allowed else {
+            lastActionError = "Microphone permission denied"
+            scheduleClearActionError()
+            return
+        }
+        do {
+            try recorder.start()
+            isCapturingVoice = true
+            inflight.insert(.captureVoice)
+            NSLog("[CompostAction] captureVoice start")
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            NSLog("[CompostAction] captureVoice failed to start: %@", msg)
+            lastActionError = "Couldn't start mic: \(msg)"
+            scheduleClearActionError()
+        }
+    }
+
+    private func endVoiceCapture() async {
+        guard isCapturingVoice else { return }
+        isCapturingVoice = false
+        let url = recorder.stop()
+        let start = Date()
+        defer { inflight.remove(.captureVoice) }
+        guard let url else { return }
+        do {
+            let text = try await voice.transcribe(audioURL: url)
+            try? FileManager.default.removeItem(at: url)
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                let ms = Int(Date().timeIntervalSince(start) * 1000)
+                NSLog("[CompostAction] captureVoice empty in %dms", ms)
+                lastActionError = "No speech detected"
+                scheduleClearActionError()
+                return
+            }
+            _ = try await notion.createMemoryNote(text: trimmed)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            let preview = String(trimmed.prefix(80))
+            NSLog("[CompostAction] captureVoice success in %dms: %@", ms, preview)
+            lastSuccess = .voiceCaptured(preview)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if case .voiceCaptured = self?.lastSuccess { self?.lastSuccess = nil }
+            }
+            // Refresh so the new memory row shows up (also picked up by next
+            // 60s tick; doing both is harmless and snappier).
+            Task { @MainActor [weak self] in
+                await self?.poller.refreshNow()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            NSLog("[CompostAction] captureVoice failed in %dms: %@", ms, msg)
+            lastActionError = "Voice capture failed: \(msg)"
+            scheduleClearActionError()
+        }
+    }
+
+    private func scheduleClearActionError() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            if self?.lastActionError != nil { self?.lastActionError = nil }
+        }
     }
 
     // MARK: - State transitions
@@ -98,6 +224,7 @@ final class NotchManager: ObservableObject {
             digestReady: s.digestReady,
             digestUrl: s.digestUrl,
             currentCue: s.currentCue,
+            memory: s.memory,
             lastError: s.lastError
         )
 
@@ -284,6 +411,8 @@ final class NotchManager: ObservableObject {
             case .applyApproved:   return "Apply"
             case .applyProposal:   return "Apply"
             case .reviewDraft:     return "Review"
+            case .readAloud:       return "Read aloud"
+            case .captureVoice:    return "Voice capture"
             }
         }()
         let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)

@@ -12,9 +12,16 @@ struct NotionDbIds {
     let frozenDrafts: String
     let weeklyDigests: String
     let cueCards: String
+    let notionMemory: String
     let parentPage: String
+    /// Parent page under which `createMemoryNote` writes voice-captured notes.
+    /// The `memoryIngest` worker picks them up from there on its next tick.
+    let memoryParentPage: String
 
-    static let empty = NotionDbIds(compostPile: "", frozenDrafts: "", weeklyDigests: "", cueCards: "", parentPage: "")
+    static let empty = NotionDbIds(
+        compostPile: "", frozenDrafts: "", weeklyDigests: "", cueCards: "",
+        notionMemory: "", parentPage: "", memoryParentPage: ""
+    )
 }
 
 enum NotionError: Error, LocalizedError {
@@ -141,6 +148,64 @@ final class NotionClient {
                 return lc > rc
             }
             .first
+    }
+
+    /// Newest 12 memory items by Captured At desc. Empty when the user hasn't
+    /// configured a Notion Memory DB ID — the 🧠 Memory section silently
+    /// hides itself in that case.
+    func fetchRecentMemory(limit: Int = 12) async throws -> [MemoryItem] {
+        guard !ids.notionMemory.isEmpty else { return [] }
+        let pages = try await queryDatabase(ids.notionMemory, filter: nil)
+        return pages
+            .compactMap(MemoryItem.init)
+            .sorted { (lhs, rhs) in
+                (lhs.capturedAt ?? .distantPast) > (rhs.capturedAt ?? .distantPast)
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Create a new memory page under the user's `memoryParentPage`. Used by
+    /// the voice-capture flow (STT) to file transcribed notes. The
+    /// `memoryIngest` worker picks it up on its next 15-min tick and writes
+    /// the row into `notionMemory`.
+    /// Throws `NotionError.toolFailed` when `memoryParentPage` isn't set or
+    /// when Notion returns non-2xx.
+    func createMemoryNote(text: String) async throws -> String {
+        guard !ids.memoryParentPage.isEmpty else {
+            throw NotionError.toolFailed(
+                "Memory parent page not configured. Set it in Settings."
+            )
+        }
+        let nowISO = ISO8601DateFormatter().string(from: Date())
+        let title = "[!memory] Voice note \(nowISO.prefix(19))"
+        let payload: [String: Any] = [
+            "parent": ["page_id": ids.memoryParentPage],
+            "properties": [
+                "title": [["text": ["content": title]]]
+            ],
+            "children": [
+                [
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": [
+                        "rich_text": [["type": "text", "text": ["content": text]]]
+                    ]
+                ]
+            ]
+        ]
+        var req = authed(base.appendingPathComponent("pages"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, resp) = try await sendWithRetry(req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NotionError.httpStatus(
+                (resp as? HTTPURLResponse)?.statusCode ?? -1,
+                String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+        let decoded = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return decoded?["id"] as? String ?? ""
     }
 
     // MARK: - Tool invocation

@@ -100,6 +100,7 @@ struct ExpandedView: View {
         case .applied:                    return "Approved proposals applied"
         case .proposalApplied(let title): return "Applied: \(title)"
         case .reviewed:                   return "Draft reviewed"
+        case .voiceCaptured(let preview): return "Voice note: \(preview)"
         }
     }
 
@@ -117,6 +118,11 @@ struct ExpandedView: View {
                     sectionLabel("☀️ Up next")
                     CueRow(cue: cue, manager: manager)
                         .staggered(index: 0, appeared: appeared)
+                }
+
+                if !manager.summary.memory.isEmpty {
+                    MemorySection(manager: manager)
+                        .staggered(index: 1, appeared: appeared)
                 }
 
                 if manager.summary.proposalCount > 0 {
