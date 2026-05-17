@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { Client } from "@notionhq/client";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,15 +29,26 @@ if (!frozenDs) die("FROZEN_DRAFTS_DATA_SOURCE_ID is required");
 const notion = new Client({ auth: token });
 const gardenerRe = /\[!(?:compost|gardener|stale)\]/i;
 const sleepRe = /\[!sleep\]|safe demo late-night draft|demo late-night draft/i;
+const canonicalSleepDemoTitleRe = /\[!sleep\].*safe demo late-night draft/i;
+const loudSleepDemoMarkdown = `## Draft
+I AM ABSOLUTELY CERTAIN this whole plan will fall apart if the team does not tighten the demo flow IMMEDIATELY. EVERYONE keeps adding ideas, and it feels like the important pieces are getting buried. We should NEVER pretend the app is done just because the UI looks good, and we should ALWAYS require proof that the buttons trigger real Worker-backed actions.
+
+The actual requirement is simple: every visible button has to do a real Worker-backed action, every action needs to leave an audit trail in Notion, and the app needs to show the truth even when Notion is slow.
+
+This is a safe demo source page. The calmer rewrite should make this draft less intense without changing the meaning.`;
 
 const stats = {
   proposalRowsReset: 0,
+  proposalRowsReadOnly: 0,
   gardenerTargetsUnarchived: 0,
-  frozenDraftsExpired: 0,
+  frozenDraftRowsExpired: 0,
+  frozenDraftRowsReadOnly: 0,
   sleepSourcesRestored: 0,
+  appResolvedStateCleared: 0,
   skipped: 0,
 };
 
+clearAppResolvedState();
 await resetGardenerRows();
 await resetFrozenDraftRows();
 
@@ -51,16 +63,16 @@ async function resetGardenerRows() {
       continue;
     }
 
-    await notion.pages.update({
-      page_id: row.id,
-      properties: {
-        Approved: { checkbox: false },
-        Applied: { checkbox: false },
-        Error: { rich_text: [] },
-      },
-    });
-    stats.proposalRowsReset += 1;
-    await pace();
+    if (await tryUpdatePage(row.id, {
+      Approved: { checkbox: false },
+      Applied: { checkbox: false },
+      Error: { rich_text: [] },
+    })) {
+      stats.proposalRowsReset += 1;
+      await pace();
+    } else {
+      stats.proposalRowsReadOnly += 1;
+    }
 
     const targetPageId = readText(row, "Target Page ID");
     if (!targetPageId) continue;
@@ -74,30 +86,80 @@ async function resetGardenerRows() {
 
 async function resetFrozenDraftRows() {
   const rows = await queryAll(frozenDs);
+  const sourceRestores = new Map();
+
   for (const row of rows) {
     const title = pageTitle(row);
+    if (isAuditTitle(title)) {
+      stats.skipped += 1;
+      continue;
+    }
     if (!sleepRe.test(title)) {
       stats.skipped += 1;
       continue;
     }
 
     const sourcePageId = readText(row, "Source Page ID");
-    const original = readText(row, "Original Snapshot") || readText(row, "Original");
+    const original = canonicalSleepDemoTitleRe.test(title)
+      ? loudSleepDemoMarkdown
+      : readText(row, "Original Snapshot") || readText(row, "Original");
+
     if (sourcePageId && original && await isSafeTarget(sourcePageId, sleepRe)) {
-      await replacePageContent(sourcePageId, original);
-      stats.sleepSourcesRestored += 1;
+      const existing = sourceRestores.get(sourcePageId);
+      if (!existing || loudness(original) > loudness(existing.markdown)) {
+        sourceRestores.set(sourcePageId, { markdown: original });
+      }
     }
 
-    await notion.pages.update({
-      page_id: row.id,
-      properties: {
-        Status: { select: { name: "expired" } },
-        Error: { rich_text: [] },
-      },
-    });
-    stats.frozenDraftsExpired += 1;
-    await pace();
+    if (await tryUpdatePage(row.id, {
+      Status: { select: { name: "expired" } },
+      Error: { rich_text: [] },
+    })) {
+      stats.frozenDraftRowsExpired += 1;
+      await pace();
+    } else {
+      stats.frozenDraftRowsReadOnly += 1;
+    }
   }
+
+  for (const [sourcePageId, restore] of sourceRestores) {
+    await replacePageContent(sourcePageId, restore.markdown);
+    stats.sleepSourcesRestored += 1;
+  }
+}
+
+async function tryUpdatePage(pageId, properties) {
+  try {
+    await notion.pages.update({ page_id: pageId, properties });
+    return true;
+  } catch (error) {
+    if (/read-only property|Cannot modify read-only/i.test(String(error?.message ?? error))) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function clearAppResolvedState() {
+  for (const key of ["compost.resolvedDraftIds", "compost.resolvedProposalIds"]) {
+    try {
+      execFileSync("defaults", ["delete", "com.compost.app", key], { stdio: "ignore" });
+      stats.appResolvedStateCleared += 1;
+    } catch {
+      // Missing keys are fine; this reset should be idempotent.
+    }
+  }
+}
+
+function loudness(markdown) {
+  const text = String(markdown);
+  const capsWords = text.match(/\b[A-Z]{3,}\b/g)?.length ?? 0;
+  const absolutes = text.match(/\b(?:ALWAYS|NEVER|EVERYONE|ABSOLUTELY|IMMEDIATELY)\b/g)?.length ?? 0;
+  return capsWords + absolutes * 2;
+}
+
+function isAuditTitle(title) {
+  return /^\s*\[!audit\]/i.test(String(title));
 }
 
 async function queryAll(dataSourceId) {
@@ -119,7 +181,9 @@ async function queryAll(dataSourceId) {
 async function isSafeTarget(pageId, marker) {
   try {
     const page = await notion.pages.retrieve({ page_id: pageId });
-    if (marker.test(pageTitle(page))) return true;
+    const title = pageTitle(page);
+    if (isAuditTitle(title)) return false;
+    if (marker.test(title)) return true;
     const blocks = await notion.blocks.children.list({ block_id: pageId, page_size: 20 });
     return blocks.results.some((block) => marker.test(blockText(block)));
   } catch {

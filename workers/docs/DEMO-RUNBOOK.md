@@ -69,11 +69,19 @@ npm run demo:reset
 
 This only touches demo-marked rows/pages:
 
-- resets `[!compost]` proposal rows to `Approved=false`, `Applied=false`
+- resets `[!compost]` proposal rows to `Approved=false`, `Applied=false` when
+  the managed DB allows direct writes
 - unarchives safe `[!compost]` targets if the prior rehearsal applied them
-- restores safe `[!sleep]` source pages from their original snapshot
-- expires old safe frozen draft rows
+- restores the canonical `[!sleep]` source page to a deliberately loud draft
+  so `Use calmer` has a visible Notion-side mutation again
+- expires old safe frozen draft rows when the managed DB allows direct writes
+- clears the app's local resolved-row hide cache for `com.compost.app`
 - resets and retriggers `cue`, `sleepOnItReviewer`, and `gardener`
+
+The reset script treats managed DB row updates as best-effort because Notion
+Workers data-source rows can be read-only to the public API. Source pages and
+safe target pages are still restored directly. `[!audit]` pages are excluded
+from Sleep-On-It source discovery so audit trails cannot become new draft rows.
 
 ## Refresh and apply one cleanup
 
@@ -139,6 +147,8 @@ If Sleep-On-It rows do not appear, verify:
 - `SLEEP_ON_IT_FORCE_FIRE=true` is present in remote env for demo mode.
 - `[!sleep]` or `demo late-night draft` exists in the source page title.
 - The source page has at least 30 words.
+- The source page is not already identical to its calmer rewrite; no-op demo
+  draft rows are intentionally skipped.
 
 ## Notion sharing checklist
 

@@ -47,6 +47,7 @@ export function registerMemory(worker: any, dbs: { notionMemory: any; embeddings
       if (!notionTokenReady()) { warnMissingToken("memoryIngest"); return emptySync(); }
       const notion = notionClient(context);
       const records = await buildMemoryRecords(notion);
+      await archiveLiveNonItemRows(notion);
       await upsertLiveMemoryRows(notion, records);
       return {
         changes: records.map(memoryChange),
@@ -119,6 +120,7 @@ async function recordsForPage(notion: any, page: any): Promise<MemoryRecord[]> {
   const blocks = await fetchFirstBlocks(notion, page.id, 60);
   const title = pageTitle(page);
   const noteText = blocks.map(extractBlockText).filter(Boolean).join("\n").trim();
+  const manualCaption = extractManualCaption(noteText);
   const imageBlocks = blocks.filter(isImageLikeBlock);
   const capturedAt = page.last_edited_time ?? page.created_time ?? new Date().toISOString();
 
@@ -127,7 +129,7 @@ async function recordsForPage(notion: any, page: any): Promise<MemoryRecord[]> {
     for (const block of imageBlocks.slice(0, 4)) {
       const url = imageUrl(block);
       if (!url) continue;
-      const caption = await captionImage(url, title, noteText);
+      const caption = manualCaption || await captionImage(url, title, noteText);
       const contentForEmbedding = `${title}\n${caption}\n${noteText}`.trim();
       const embeddingId = await ensureEmbedding(notion, contentForEmbedding, title);
       records.push({
@@ -147,7 +149,7 @@ async function recordsForPage(notion: any, page: any): Promise<MemoryRecord[]> {
   }
 
   if (noteText.length === 0) return [];
-  const caption = await summarizeNote(noteText, title);
+  const caption = manualCaption || await summarizeNote(noteText, title);
   const embeddingId = await ensureEmbedding(notion, `${title}\n${caption}\n${noteText}`, title);
   return [{
     id: sha1(`note|${page.id}|${noteText}`),
@@ -288,6 +290,30 @@ async function upsertLiveMemoryRows(notion: any, records: MemoryRecord[]) {
       console.warn("live memory row upsert skipped:", shortError(e));
     }
     await pace();
+  }
+}
+
+async function archiveLiveNonItemRows(notion: any) {
+  const dataSourceId = memoryDataSourceId();
+  if (!dataSourceId) return;
+
+  try {
+    const res: any = await notion.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 50,
+      filter: {
+        or: [
+          { property: "Title", title: { contains: "Compost Memory Inbox" } },
+          { property: "Caption", rich_text: { contains: "landing zone for memory" } },
+        ],
+      },
+    });
+    for (const row of res.results ?? []) {
+      await notion.pages.update({ page_id: row.id, archived: true });
+      await pace();
+    }
+  } catch (e: any) {
+    console.warn("live memory cleanup skipped:", shortError(e));
   }
 }
 
@@ -498,6 +524,8 @@ async function embedText(text: string): Promise<number[] | null> {
 function isMemorySource(page: any): boolean {
   const title = pageTitle(page);
   if (/^\s*\[!audit\]/i.test(title)) return false;
+  if (/compost memory inbox/i.test(title)) return false;
+  if (page.properties?.["Source Page ID"] || page.properties?.["Captured At"]) return false;
   return MEMORY_SOURCE_RE.test(title);
 }
 
@@ -526,6 +554,13 @@ function inferTags(text: string): string[] {
   if (/\b(photo|image|picture|screenshot)\b/i.test(text)) out.add("moment");
   if (out.size === 0) out.add("reference");
   return [...out].slice(0, 3);
+}
+
+function extractManualCaption(text: string): string {
+  const match = text.match(/^Caption\s*\(manual\):\s*(.+)$/im);
+  const caption = cleanOneLine(match?.[1] ?? "");
+  if (!caption || /^add after dropping/i.test(caption)) return "";
+  return caption;
 }
 
 function lexicalScore(query: string, text: string): number {
