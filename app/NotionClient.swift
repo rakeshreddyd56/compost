@@ -99,7 +99,11 @@ final class NotionClient {
             "property": "Status",
             "select": ["equals": "frozen"],
         ])
-        return pages.compactMap(FrozenDraft.init)
+        // Newest `Frozen At` first so the most recent late-night write shows
+        // at the top. The string is ISO-8601 → lexicographic sort is correct.
+        return pages
+            .compactMap(FrozenDraft.init)
+            .sorted { $0.frozenAt > $1.frozenAt }
     }
 
     func latestWeeklyDigest() async throws -> WeeklyDigest? {
@@ -130,13 +134,14 @@ final class NotionClient {
     // MARK: - Tool invocation
     //
     // Two paths, try in order:
-    //  (A) Notion REST endpoint for invoking a Worker tool (verify Sat AM).
-    //  (B) Shell out to `ntn workers exec <toolName> --remote -d '<json>'`.
+    //  (A) Notion REST endpoint for invoking a Worker tool. When 200, trust it.
+    //  (B) Shell out to `ntn workers exec <toolName> -d '<json>'` from the
+    //      workers project cwd. We dropped `--remote` (S13): the certified
+    //      worker now serves both local exec and remote invocation through the
+    //      same path, and `--remote` was masking failures during the demo.
 
     func invokeTool(_ toolName: String, input: [String: Any]) async throws -> Data {
-        // Try (A): direct REST. Endpoint path is TBD — when it returns 200 we
-        // trust it. Any other status (or thrown error) falls through to the
-        // CLI which is the source of truth right now.
+        // Try (A): direct REST.
         do {
             var req = authed(base.appendingPathComponent("workers/tools/\(toolName)/invoke"))
             req.httpMethod = "POST"
@@ -152,16 +157,14 @@ final class NotionClient {
             if case .toolFailed = e { throw e }
         } catch { /* network/etc: fall through to CLI */ }
 
-        // (B): shell-out fallback to `ntn workers exec`.
-        // `ntn` reads workers.json from the current working directory to find
-        // the worker ID — without cwd it fails with "No worker ID found" when
-        // the app is launched from the .app bundle.
+        // (B): shell-out fallback.
+        let ntn = try Self.resolveNtnBinary()
         let json = try JSONSerialization.data(withJSONObject: input)
         let jsonString = String(data: json, encoding: .utf8) ?? "{}"
 
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/local/bin/ntn")
-        task.arguments = ["workers", "exec", toolName, "--remote", "-d", jsonString]
+        task.executableURL = ntn
+        task.arguments = ["workers", "exec", toolName, "-d", jsonString]
         task.currentDirectoryURL = Self.workersDirectoryURL()
 
         let pipe = Pipe()
@@ -183,6 +186,38 @@ final class NotionClient {
 
         try Self.validateToolResponse(data)
         return data
+    }
+
+    /// Resolve the `ntn` CLI binary by trying, in order:
+    ///   1. `$NTN_BIN` environment override (if set and executable)
+    ///   2. `/usr/local/bin/ntn`  (Intel Homebrew + manual installs)
+    ///   3. `/opt/homebrew/bin/ntn`  (Apple Silicon Homebrew)
+    ///   4. `~/.local/bin/ntn`  (user-local install)
+    /// Throws `NotionError.toolFailed` with a clear message when nothing is
+    /// found so the failing row shows the user how to fix it instead of a
+    /// generic "ntn workers exec exited 127".
+    private static func resolveNtnBinary() throws -> URL {
+        let fm = FileManager.default
+        var candidates: [String] = []
+
+        if let override = ProcessInfo.processInfo.environment["NTN_BIN"],
+           !override.isEmpty {
+            candidates.append((override as NSString).expandingTildeInPath)
+        }
+        candidates.append("/usr/local/bin/ntn")
+        candidates.append("/opt/homebrew/bin/ntn")
+        let home = fm.homeDirectoryForCurrentUser
+        candidates.append(home.appendingPathComponent(".local/bin/ntn").path)
+
+        for path in candidates {
+            if fm.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        throw NotionError.toolFailed(
+            "ntn CLI not found. Set $NTN_BIN or install at /usr/local/bin/ntn, "
+            + "/opt/homebrew/bin/ntn, or ~/.local/bin/ntn"
+        )
     }
 
     /// Parse the tool response and throw if it is a JSON object whose `ok`

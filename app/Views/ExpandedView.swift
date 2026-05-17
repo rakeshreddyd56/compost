@@ -96,7 +96,7 @@ struct ExpandedView: View {
 
     private func successMessage(_ ping: SuccessPing) -> String {
         switch ping {
-        case .tidied:                     return "Tidy run kicked off"
+        case .tidied:                     return "Tidy proposals refreshed"
         case .applied:                    return "Approved proposals applied"
         case .proposalApplied(let title): return "Applied: \(title)"
         case .reviewed:                   return "Draft reviewed"
@@ -224,9 +224,9 @@ struct ExpandedView: View {
                 if busy {
                     ProgressView().controlSize(.small).tint(.white)
                 } else {
-                    Image(systemName: "wand.and.stars.inverse").font(.caption)
+                    Image(systemName: "arrow.clockwise").font(.caption)
                 }
-                Text(busy ? "Tidying…" : "Tidy now").font(.caption.weight(.semibold))
+                Text(busy ? "Refreshing…" : "Refresh tidy").font(.caption.weight(.semibold))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -237,9 +237,9 @@ struct ExpandedView: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
-        .help("Trigger Gardener worker now")
-        .accessibilityLabel(busy ? "Tidy in progress" : "Tidy now")
-        .accessibilityHint("Runs the Gardener worker to refresh proposals")
+        .help("Refresh Gardener proposals (does not apply anything)")
+        .accessibilityLabel(busy ? "Refreshing tidy proposals" : "Refresh tidy")
+        .accessibilityHint("Refreshes the Gardener proposal list without applying any actions")
     }
 
     // MARK: - Helpers
