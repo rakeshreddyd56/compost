@@ -38,6 +38,7 @@ enum SuccessPing: Equatable {
     case reviewed(String)
     case voiceCaptured(String)   // transcript preview
     case memoryTagged(String, String)  // (memory title, tag)
+    case workspaceRefreshed      // tidyNow + refreshBridge both ok
 }
 
 /// What's filling the expanded card right now. The voice surface replaces
@@ -478,6 +479,103 @@ final class NotchManager: ObservableObject {
         await runAction(.tidyNow, success: .tidied) {
             _ = try await self.notion.invokeTool("tidyNow", input: [:])
         }
+    }
+
+    /// "Refresh" button. Fires `tidyNow({})` and `refreshBridge({surface:"all"})`
+    /// in parallel and aggregates the result. Semantics are honest:
+    ///   • tidyNow failure → red error, no success ping
+    ///   • refreshBridge ok=false with non-empty errors → red error
+    ///   • refreshBridge ok=true with informational notes (the expected
+    ///     "Cue Cards are Worker-sync managed…" beat) → logged only, NOT
+    ///     surfaced as a UI error.
+    /// Either tool returning ok still triggers a poller refresh so the
+    /// memory/tidy sections visibly update on the next tick.
+    func refreshAll() async {
+        let action = InflightAction.tidyNow
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+
+        async let tidyResult: Result<Void, Error> = doInvoke("tidyNow", input: [:])
+        async let bridgeResult: Result<BridgeReply, Error> = doInvokeBridge()
+        let (tidy, bridge) = await (tidyResult, bridgeResult)
+
+        var errors: [String] = []
+        if case .failure(let e) = tidy {
+            errors.append("Tidy: \((e as? LocalizedError)?.errorDescription ?? String(describing: e))")
+        }
+        if case .failure(let e) = bridge {
+            errors.append("Bridge: \((e as? LocalizedError)?.errorDescription ?? String(describing: e))")
+        }
+        if case .success(let br) = bridge {
+            if !br.ok && !br.errors.isEmpty {
+                errors.append("Bridge: \(br.errors.joined(separator: "; "))")
+            }
+            // Notes (e.g. "Cue Cards are Worker-sync managed…") are
+            // expected, not errors. Log + move on.
+            for note in br.notes {
+                NSLog("[CompostAction] refreshBridge note: %@", note)
+            }
+        }
+
+        if errors.isEmpty {
+            lastActionError = nil
+            lastSuccess = .workspaceRefreshed
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if self?.lastSuccess == .workspaceRefreshed { self?.lastSuccess = nil }
+            }
+        } else {
+            lastSuccess = nil
+            lastActionError = "Refresh failed: \(errors.joined(separator: " · "))"
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                if self?.lastActionError != nil { self?.lastActionError = nil }
+            }
+        }
+
+        await poller.refreshNow()
+    }
+
+    private func doInvoke(_ tool: String, input: [String: Any]) async -> Result<Void, Error> {
+        do {
+            _ = try await notion.invokeTool(tool, input: input)
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private struct BridgeReply {
+        let ok: Bool
+        let errors: [String]
+        let notes: [String]
+    }
+
+    private func doInvokeBridge() async -> Result<BridgeReply, Error> {
+        do {
+            let data = try await notion.invokeTool("refreshBridge", input: ["surface": "all"])
+            return .success(Self.parseBridge(data))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static func parseBridge(_ data: Data) -> BridgeReply {
+        let raw: Any? = (try? JSONSerialization.jsonObject(with: data))
+            ?? jsonObjectFromTail(data)
+        guard let dict = raw as? [String: Any] else {
+            return BridgeReply(ok: true, errors: [], notes: [])
+        }
+        let ok = (dict["ok"] as? Bool) ?? true
+        let errs = (dict["errors"] as? [String])
+            ?? (dict["errors"] as? [Any])?.compactMap { $0 as? String }
+            ?? []
+        // The Worker may include a single "note" field (per the cue-sync
+        // case) or a "notes" array. Accept either; both are informational.
+        var notes: [String] = []
+        if let n = dict["note"] as? String, !n.isEmpty { notes.append(n) }
+        if let arr = dict["notes"] as? [String] { notes.append(contentsOf: arr) }
+        return BridgeReply(ok: ok, errors: errs, notes: notes)
     }
 
     func applyApproved() async {

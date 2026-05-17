@@ -107,6 +107,7 @@ struct ExpandedView: View {
             let t = preview.trimmingCharacters(in: .whitespaces)
             return t.isEmpty ? "Voice captured" : "Voice: \(t.prefix(60))"
         case .memoryTagged(let title, let tag): return "#\(tag) → \(title)"
+        case .workspaceRefreshed:           return "Workspace refreshed"
         }
     }
 
@@ -234,14 +235,14 @@ struct ExpandedView: View {
 
     private var tidyButton: some View {
         let busy = manager.inflight.contains(.tidyNow)
-        return Button(action: { Task { await manager.tidyNow() } }) {
+        return Button(action: { Task { await manager.refreshAll() } }) {
             HStack(spacing: 4) {
                 if busy {
                     ProgressView().controlSize(.small).tint(.white)
                 } else {
                     Image(systemName: "arrow.clockwise").font(.caption)
                 }
-                Text(busy ? "Refreshing…" : "Refresh tidy").font(.caption.weight(.semibold))
+                Text(busy ? "Refreshing…" : "Refresh").font(.caption.weight(.semibold))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -252,8 +253,8 @@ struct ExpandedView: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
-        .help("Refresh Gardener proposals (does not apply anything)")
-        .accessibilityLabel(busy ? "Refreshing tidy proposals" : "Refresh tidy")
+        .help("Refresh Gardener proposals and Steward bridge pages (Cue still publishes on its 5-minute sync)")
+        .accessibilityLabel(busy ? "Refreshing workspace" : "Refresh workspace")
     }
 
     // MARK: - Helpers
