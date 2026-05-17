@@ -2,7 +2,7 @@
  * Compost — Notion Workers entry point.
  *
  * Four workers + tools:
- *   🪴 Gardener    — nightly cron, scores pages, proposes cleanup, applies approved.
+ *   🪴 Gardener    — nightly cron, scores pages, proposes cleanup, applies one safe proposal on request.
  *   🌙 Sleep-On-It — webhook, freezes late-night drafts, presents calm rewrite in morning.
  *   ☀️ Cue         — every 5m, surfaces the "right thing at the right time" from tagged Notion pages.
  *   📰 The Weekly  — daily cron, Sunday-only, semantic diff of last 7 days (STRETCH).

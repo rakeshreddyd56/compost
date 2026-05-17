@@ -3,7 +3,7 @@
 #
 # Default mode is safe: TypeScript check, ping, sync status, and sync previews.
 # Use --write to trigger live sync writes. Use --apply-tools to run tidyNow
-# and the applyProposal contract check.
+# and the applyProposal contract check. Use --reset-demo to restore safe demo rows.
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 usage() {
   cat <<'EOF'
-Usage: bash ./test.sh [--write] [--apply-tools] [--apply-proposal ID] [--legacy-apply-approved] [--skip-previews] [--skip-logs]
+Usage: bash ./test.sh [--write] [--apply-tools] [--apply-proposal ID] [--review-draft ID DECISION] [--reset-demo] [--legacy-apply-approved] [--skip-previews] [--skip-logs]
 
 Safe default:
   - npm run check
@@ -23,6 +23,9 @@ Options:
   --write                  Trigger cue, sleepOnItReviewer, and gardener for real writes.
   --apply-tools            Run tidyNow and verify applyProposal's ok=false contract.
   --apply-proposal ID      Apply one explicit safe demo proposal through applyProposal.
+  --review-draft ID DECISION
+                           Review one explicit safe demo draft. DECISION is approve or reject.
+  --reset-demo             Restore/expire only safe demo rows, reset sync state, and retrigger demo syncs.
   --legacy-apply-approved  Also run the legacy batch applyApproved tool.
   --skip-previews          Skip sync previews.
   --skip-logs              Skip latest run logs.
@@ -35,6 +38,9 @@ EOF
 WRITE=0
 APPLY_TOOLS=0
 APPLY_PROPOSAL_ID="${COMPOST_DEMO_PROPOSAL_ID:-}"
+REVIEW_DRAFT_ID="${COMPOST_DEMO_DRAFT_ID:-}"
+REVIEW_DRAFT_DECISION="${COMPOST_DEMO_DRAFT_DECISION:-}"
+RESET_DEMO=0
 LEGACY_APPLY_APPROVED=0
 SKIP_PREVIEWS=0
 SKIP_LOGS=0
@@ -52,6 +58,17 @@ while [[ $# -gt 0 ]]; do
       APPLY_PROPOSAL_ID="$1"
       APPLY_TOOLS=1
       ;;
+    --review-draft)
+      shift
+      if [[ $# -lt 2 || -z "${1:-}" || -z "${2:-}" ]]; then
+        echo "--review-draft requires a Draft ID and decision (approve|reject)" >&2
+        exit 2
+      fi
+      REVIEW_DRAFT_ID="$1"
+      REVIEW_DRAFT_DECISION="$2"
+      shift
+      ;;
+    --reset-demo) RESET_DEMO=1 ;;
     --legacy-apply-approved) LEGACY_APPLY_APPROVED=1 ;;
     --skip-previews) SKIP_PREVIEWS=1 ;;
     --skip-logs) SKIP_LOGS=1 ;;
@@ -138,6 +155,15 @@ if [[ "$SKIP_PREVIEWS" -eq 0 ]]; then
   done
 fi
 
+if [[ "$RESET_DEMO" -eq 1 ]]; then
+  section "Safe demo reset"
+  run node ./scripts/reset-demo-state.mjs
+  for key in cue sleepOnItReviewer gardener; do
+    run "$NTN" workers sync state reset "${WORKER_ARGS[@]}" "$key"
+    run "$NTN" workers sync trigger "${WORKER_ARGS[@]}" "$key"
+  done
+fi
+
 if [[ "$WRITE" -eq 1 ]]; then
   section "Live demo sync triggers"
   for key in cue sleepOnItReviewer gardener; do
@@ -182,6 +208,22 @@ if [[ "$APPLY_TOOLS" -eq 1 ]]; then
 else
   section "Apply tools skipped"
   echo "Use --apply-tools to refresh proposals and verify applyProposal; pass --apply-proposal ID to mutate one safe demo target."
+fi
+
+if [[ -n "$REVIEW_DRAFT_ID" || -n "$REVIEW_DRAFT_DECISION" ]]; then
+  if [[ -z "$REVIEW_DRAFT_ID" || -z "$REVIEW_DRAFT_DECISION" ]]; then
+    echo "Set both COMPOST_DEMO_DRAFT_ID and COMPOST_DEMO_DRAFT_DECISION, or pass --review-draft ID DECISION." >&2
+    exit 2
+  fi
+  if [[ "$REVIEW_DRAFT_DECISION" != "approve" && "$REVIEW_DRAFT_DECISION" != "reject" ]]; then
+    echo "reviewDraft decision must be approve or reject." >&2
+    exit 2
+  fi
+  section "Review explicit safe demo draft"
+  run "$NTN" workers exec "${WORKER_ARGS[@]}" reviewDraft -d "{\"draftId\":\"$REVIEW_DRAFT_ID\",\"decision\":\"$REVIEW_DRAFT_DECISION\"}"
+else
+  section "Draft review skipped"
+  echo "Pass --review-draft ID approve|reject to certify one safe demo draft."
 fi
 
 if [[ "$SKIP_LOGS" -eq 0 ]]; then

@@ -132,7 +132,7 @@ ntn workers webhooks list                # grab the URL for Notion webhook subsc
 ntn workers runs logs --follow           # live logs (open in side terminal during demo)
 ntn workers sync trigger gardener        # force-fire a sync (demo / testing)
 ntn workers sync trigger weekly          # same; set WEEKLY_FORCE_FIRE=true via env first
-ntn workers exec tidyNow --remote -d '{}' # run a tool manually
+ntn workers exec tidyNow -d '{}'          # run a remote tool manually
 ntn workers sync state reset gardener    # nuke state if a run got corrupted
 ```
 

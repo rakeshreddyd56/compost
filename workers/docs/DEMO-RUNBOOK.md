@@ -11,6 +11,8 @@ parallel.
 - `tidyNow` refreshes proposal rows only; it does not mutate target pages.
 - `applyProposal` mutates only explicit safe demo pages marked `[!compost]`,
   `[!gardener]`, or `[!stale]`.
+- `reviewDraft approve` mutates only explicit safe demo pages marked `[!sleep]`
+  or demo-safe in the title/body. `reviewDraft reject` never mutates a source.
 - Legacy `applyApproved` only runs when passed `--legacy-apply-approved`.
 - `sleepOnItCleanup` is previewed during demo smoke checks, but not triggered by
   `--write`.
@@ -55,6 +57,24 @@ That runs real triggers for:
 
 It intentionally does not trigger `sleepOnItCleanup`.
 
+## Reset safe demo state
+
+Use this before a rehearsal when old frozen rows or applied proposals are making
+the notch noisy:
+
+```bash
+cd /Users/rakeshreddy/compost/workers
+npm run demo:reset
+```
+
+This only touches demo-marked rows/pages:
+
+- resets `[!compost]` proposal rows to `Approved=false`, `Applied=false`
+- unarchives safe `[!compost]` targets if the prior rehearsal applied them
+- restores safe `[!sleep]` source pages from their original snapshot
+- expires old safe frozen draft rows
+- resets and retriggers `cue`, `sleepOnItReviewer`, and `gardener`
+
 ## Refresh and apply one cleanup
 
 Refresh proposals without mutating target pages:
@@ -69,6 +89,14 @@ Apply one explicit safe demo proposal from the notch row:
 ```bash
 cd /Users/rakeshreddy/compost/workers
 bash ./test.sh --skip-previews --apply-proposal <proposal-id>
+```
+
+Certify one draft decision:
+
+```bash
+cd /Users/rakeshreddy/compost/workers
+bash ./test.sh --skip-previews --review-draft <draft-id> reject
+bash ./test.sh --skip-previews --review-draft <fresh-draft-id> approve
 ```
 
 ## Demo force flags

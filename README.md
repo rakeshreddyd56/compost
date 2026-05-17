@@ -106,7 +106,7 @@ flowchart LR
   Notion["Notion workspace<br/>pages, databases, webhooks"] --> Workers["Notion Workers<br/>TypeScript runtime"]
   Workers --> DBs["Managed Notion DBs<br/>Compost Pile<br/>Frozen Drafts<br/>Cue Cards"]
   DBs --> App["Compost.app<br/>SwiftUI + AppKit<br/>DynamicNotchKit"]
-  App --> Tools["Worker tools<br/>tidyNow<br/>reviewDraft<br/>ping"]
+  App --> Tools["Worker tools<br/>tidyNow<br/>applyProposal<br/>reviewDraft<br/>ping"]
   Tools --> Workers
 ```
 
@@ -117,7 +117,8 @@ flowchart LR
 | `ping` | tool | Remote sanity check. |
 | `cue` | sync | Parses `[!cue]` pages and writes current/next cards. |
 | `gardener` | sync | Scores workspace rot and writes cleanup proposals. |
-| `tidyNow` | tool | Applies approved Gardener proposals. |
+| `tidyNow` | tool | Refreshes Gardener proposals without mutating target pages. |
+| `applyProposal` | tool | Approves and applies one safe demo Gardener proposal. |
 | `onLateNightEdit` | webhook | Receives Notion page update events for Sleep-On-It. |
 | `sleepOnItReviewer` | sync | Moves frozen drafts into morning review. |
 | `sleepOnItCleanup` | sync | Expires stale draft reviews. |
@@ -140,7 +141,7 @@ Compost is intentionally conservative.
 - **Notion Workers** with `@notionhq/workers`
 - **Notion managed databases** for state
 - **Notion webhooks** for late-night page updates
-- **Notion Worker tools** for `tidyNow` and `reviewDraft`
+- **Notion Worker tools** for `tidyNow`, `applyProposal`, and `reviewDraft`
 - **SwiftUI + AppKit** for the macOS client
 - **DynamicNotchKit** for the notch/floating surface
 - **Claude** for calm rewrite and cue phrasing
@@ -166,6 +167,13 @@ ntn workers sync trigger gardener --preview
 ```
 
 The Notion token in `workers/.env` should be an internal integration token with access to the demo workspace pages.
+
+For rehearsal, reset only safe demo rows and regenerate managed DB output:
+
+```bash
+cd workers
+npm run demo:reset
+```
 
 ## Run The App
 

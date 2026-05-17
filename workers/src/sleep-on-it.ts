@@ -134,15 +134,18 @@ export function registerSleepOnIt(worker: any, dbs: { frozenDrafts: any; pacer: 
       if (decision === "approve") {
         const sourcePageId = readText(row, "Source Page ID");
         const rewrite = readText(row, "Rewrite");
+        if (!sourcePageId) return { ok: false, error: "Source Page ID missing" };
+        if (!rewrite.trim()) return { ok: false, error: "Rewrite is empty" };
         try {
+          await assertSafeSleepTarget(notion, sourcePageId);
           await replacePageContent(notion, sourcePageId, rewrite);
-          await stampDraft(notion, row.id, { status: "approved" });
+          await stampDraft(notion, row.id, { status: "approved", error: null });
         } catch (e: any) {
-          await stampDraft(notion, row.id, { status: "error", error: String(e).slice(0, 1900) });
-          return { ok: false, error: String(e) };
+          await stampDraft(notion, row.id, { status: "error", error: shortError(e) });
+          return { ok: false, error: shortError(e) };
         }
       } else {
-        await stampDraft(notion, row.id, { status: "rejected" });
+        await stampDraft(notion, row.id, { status: "rejected", error: null });
       }
       return { ok: true, error: null };
     },
@@ -345,13 +348,35 @@ function isNotionObjectNotFound(e: any): boolean {
   return e?.code === "object_not_found" || /Could not find database|not shared with your integration/i.test(String(e?.message ?? e));
 }
 
-async function stampDraft(notion: any, pageId: string, fields: { status: string; error?: string }) {
+async function stampDraft(notion: any, pageId: string, fields: { status: string; error?: string | null }) {
   const properties: any = {
     Status:        { select: { name: fields.status } },
     "Reviewed At": { date: { start: new Date().toISOString() } },
   };
-  if (fields.error) properties["Error"] = { rich_text: [{ type: "text", text: { content: fields.error } }] };
+  if (fields.error === null) properties.Error = { rich_text: [] };
+  else if (fields.error) properties.Error = richTextProp(fields.error);
   await notion.pages.update({ page_id: pageId, properties });
+}
+
+async function assertSafeSleepTarget(notion: any, pageId: string) {
+  const page: any = await withRetryOn429(() => notion.pages.retrieve({ page_id: pageId }));
+  if (isSleepDemoSource(page)) return;
+
+  let blocks: any[] = [];
+  try {
+    const res: any = await withRetryOn429(() =>
+      notion.blocks.children.list({ block_id: pageId, page_size: 20 })
+    );
+    blocks = res.results ?? [];
+  } catch {
+    blocks = [];
+  }
+
+  if (blocks.some((b) => /\[!sleep\]|safe demo late-night draft|demo late-night draft/i.test(extractBlockText(b)))) {
+    return;
+  }
+
+  throw new Error("Refusing to replace non-demo Sleep-On-It source. Add [!sleep] to the target page title/body for this demo.");
 }
 
 async function replacePageContent(notion: any, pageId: string, markdown: string) {
@@ -475,6 +500,12 @@ function isSleepDemoSource(page: any): boolean {
   return /\[!sleep\]|demo late-night draft/i.test(pageTitle(page));
 }
 
+function extractBlockText(block: any): string {
+  const rt = block?.[block?.type]?.rich_text;
+  if (Array.isArray(rt)) return rt.map((t: any) => t.plain_text ?? "").join("");
+  return "";
+}
+
 function readText(row: any, key: string): string {
   const p = row.properties?.[key];
   if (!p) return "";
@@ -512,6 +543,10 @@ function richTextProp(text: string) {
       text: { content },
     })),
   };
+}
+
+function shortError(e: any): string {
+  return String(e?.message ?? e).slice(0, 1900);
 }
 
 function chunkText(text: string, size = 1800): string[] {
