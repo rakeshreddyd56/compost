@@ -51,7 +51,7 @@ struct PhotosView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Mascot(size: 28, mood: headerMood)
+            Mascot(size: 28, mood: headerMood, bobble: current?.mascotReaction == .selfSighting)
             VStack(alignment: .leading, spacing: 1) {
                 Text("📷 MEMORY PILE · \(photos.count) PHOTO\(photos.count == 1 ? "" : "S")")
                     .font(.caption2.weight(.bold))
@@ -128,6 +128,20 @@ struct PhotosView: View {
                         @unknown default:
                             EmptyView()
                         }
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundColor(GardenStyle.ink3)
+                        Text("Photo URL missing")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(GardenStyle.ink2)
+                        Text(current?.caption.isEmpty == false ? current!.caption : "The memory row is present, but the Worker has not stamped a signed image URL yet.")
+                            .font(.caption2)
+                            .foregroundColor(GardenStyle.ink3)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 260)
                     }
                 }
             }
@@ -255,6 +269,18 @@ struct PhotosView: View {
                 }
                 actionPill(label: "+ Tag", primary: false) {
                     withAnimation(GardenStyle.spring) { tagEditorOpen = true }
+                }
+                actionPill(label: "Ask about this ↗", primary: false) {
+                    guard let item = current else { return }
+                    let prompt = [
+                        "What do I remember from this photo?",
+                        item.caption,
+                        item.tags.isEmpty ? "" : "Tags: \(item.tags.joined(separator: ", "))",
+                        item.timeLabel(),
+                    ]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+                    Task { await manager.askCompost(prompt) }
                 }
                 Spacer()
                 if let tags = current?.tags, !tags.isEmpty {

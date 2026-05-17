@@ -149,23 +149,41 @@ struct CueRow: View {
 
     private var actionRow: some View {
         HStack(spacing: GardenStyle.actionRowGap) {
-            actionPill(label: "↗ Open in Notion", primary: true, action: openSource)
-            actionPill(label: snoozedMinutes > 0 ? "Snoozed +\(snoozedMinutes)m" : "Snooze 5m", primary: false) {
+            actionPill(label: "↗ Open in Notion", kind: .primary, action: openSource)
+            actionPill(
+                label: snoozedMinutes > 0 ? "Snoozed +\(snoozedMinutes)m" : "Snooze 5m",
+                kind: .ghost
+            ) {
                 snoozedMinutes += 5
             }
             .disabled(snoozedMinutes >= 30)
+            actionPill(label: "Ask Compost ↗", kind: .muted) {
+                Task { await manager.openScene(.voice) }
+            }
             Spacer()
         }
     }
 
-    private func actionPill(label: String, primary: Bool, action: @escaping () -> Void) -> some View {
+    private enum CueActionKind { case primary, ghost, muted }
+
+    private func actionPill(label: String, kind: CueActionKind, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundColor(primary ? .white : GardenStyle.ink)
+                .foregroundColor(
+                    kind == .primary ? .white :
+                    kind == .muted   ? GardenStyle.ink3 :
+                                       GardenStyle.ink
+                )
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Capsule().fill(primary ? GardenStyle.accentGreen : Color.white.opacity(0.08)))
+                .background(
+                    Capsule().fill(
+                        kind == .primary ? GardenStyle.accentGreen :
+                        kind == .ghost   ? Color.white.opacity(0.08) :
+                                           Color.clear
+                    )
+                )
         }
         .buttonStyle(.plain)
     }

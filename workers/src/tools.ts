@@ -8,6 +8,7 @@ import {
   applyProposal,
   refreshProposals,
 } from "./gardener";
+import { refreshCueNow } from "./cue";
 import { ingestMemoryNow } from "./memory";
 import { notionClient } from "./utils/notion-auth";
 
@@ -94,7 +95,24 @@ export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts
       let tidyProposals = 0;
 
       if (surface === "cue" || surface === "all") {
-        notes.push("Cue Cards are Worker-sync managed; update [!cue] Agent Briefing Inbox and the 5-minute cue sync publishes them.");
+        try {
+          const r = await refreshCueNow(notion);
+          cueCards = r.upserted || r.cards;
+          for (const err of r.errors) {
+            if (/read-only property|Cannot modify read-only/i.test(err)) {
+              notes.push("Cue Cards are sync-managed by Notion Workers; cue source parsed, and the scheduled/triggered cue sync publishes the row.");
+            } else {
+              errors.push(`cue:${err}`);
+            }
+          }
+        } catch (e: any) {
+          const msg = shortError(e);
+          if (/read-only property|Cannot modify read-only/i.test(msg)) {
+            notes.push("Cue Cards are sync-managed by Notion Workers; update [!cue] and trigger the cue sync to publish.");
+          } else {
+            errors.push(`cue:${msg}`);
+          }
+        }
       }
 
       if (surface === "memory" || surface === "all") {

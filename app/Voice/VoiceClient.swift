@@ -23,6 +23,13 @@ protocol VoiceClient: AnyObject {
     /// passes the recorded audio to the speech recognizer and returns the
     /// best transcript. Returns "" when the recognizer returned no result.
     func transcribe(maxDuration: TimeInterval) async throws -> String
+
+    /// Push-to-talk pair. `startListening` begins recording immediately
+    /// (no fixed duration); `stopAndTranscribe` stops the recorder and
+    /// runs recognition on what was captured. Throws on permission denial
+    /// or recognizer errors. Returns "" when no speech was recognised.
+    func startListening() async throws
+    func stopAndTranscribe() async throws -> String
 }
 
 enum VoiceError: LocalizedError {

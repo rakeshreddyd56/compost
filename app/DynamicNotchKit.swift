@@ -67,7 +67,7 @@ public class DynamicNotch<Content: View> {
             for: hostVC,
             fallback: NSSize(width: 420, height: 520),
             minimum: NSSize(width: 380, height: 260),
-            maximum: NSSize(width: 520, height: min(680, screenFrame.height - 96))
+            maximum: NSSize(width: 580, height: min(720, screenFrame.height - 96))
         )
         let panel = expandedPanel ?? makePanel()
         panel.contentViewController = hostVC

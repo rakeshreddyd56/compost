@@ -24,6 +24,7 @@ struct CompostApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchManager: NotchManager?
     private var setupWindow: NSWindow?  // retained so the manual setup window survives the launch cycle
+    private var dock: DockWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // NSLog so the path the launch took shows up in `log stream`.
@@ -33,13 +34,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let frozenDbId  = Keychain.get(.frozenDraftsDbId)
         let weeklyDbId  = Keychain.get(.weeklyDigestsDbId)
         let cueDbId     = Keychain.get(.cueCardsDbId)
-        NSLog("[Compost] keychain state — token:%@ parent:%@ compost:%@ frozen:%@ weekly:%@ cue:%@",
+        let memoryDbId  = Keychain.get(.notionMemoryDbId)
+        NSLog("[Compost] keychain state — token:%@ parent:%@ compost:%@ frozen:%@ weekly:%@ cue:%@ memory:%@",
               token        == nil ? "MISSING" : "ok",
               parentId     == nil ? "MISSING" : "ok",
               compostDbId  == nil ? "MISSING" : "ok",
               frozenDbId   == nil ? "MISSING" : "ok",
               weeklyDbId   == nil ? "MISSING" : "ok",
-              cueDbId      == nil ? "MISSING" : "ok")
+              cueDbId      == nil ? "MISSING" : "ok",
+              memoryDbId   == nil ? "MISSING" : "ok")
 
         guard let token, let parentId, let compostDbId, let frozenDbId else {
             NSLog("[Compost] required keychain fields missing — opening SetupView")
@@ -55,13 +58,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 frozenDrafts: frozenDbId,
                 weeklyDigests: Keychain.get(.weeklyDigestsDbId) ?? "",
                 cueCards: Keychain.get(.cueCardsDbId) ?? "",
-                notionMemory: Keychain.get(.notionMemoryDbId) ?? "",
+                notionMemory: memoryDbId ?? "",
                 parentPage: parentId
             )
         )
         let manager = NotchManager(notion: client)
         self.notchManager = manager
         Task { await manager.start() }
+
+        // Floating dock at the bottom of the screen for scene switching.
+        let dock = DockWindow(manager: manager)
+        dock.install()
+        self.dock = dock
     }
 
     private func openSetupWindow() {

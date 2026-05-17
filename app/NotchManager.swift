@@ -41,12 +41,14 @@ enum SuccessPing: Equatable {
     case workspaceRefreshed      // tidyNow + refreshBridge both ok
 }
 
-/// What's filling the expanded card right now. The voice surface replaces
-/// the standard expanded view instead of being a section, so the manager
-/// owns this enum directly.
+/// What's filling the expanded card right now. The dock switches between
+/// these focused scenes; `summary` is the default at-a-glance card.
 enum NotchSurface: Equatable {
     case summary
+    case cue
+    case drafts
     case voice
+    case photos
 }
 
 @MainActor
@@ -95,6 +97,14 @@ final class NotchManager: ObservableObject {
     // UserDefaults so a restart mid-demo doesn't resurrect just-applied rows.
     private static let resolvedProposalIdsKey = "compost.resolvedProposalIds"
     private var resolvedProposalIds: Set<String>
+    // Notion Worker sync data-source properties can be read-only to tool calls.
+    // rephraseDraft still returns the real Worker rewrite, so keep those tone
+    // variants locally and overlay them on the next poll instead of pretending
+    // the DB persisted a field it rejected.
+    private static let localDraftRewriteVariantsKey = "compost.localDraftRewriteVariants"
+    private var localDraftRewriteVariants: [String: [String: String]]
+    private var userCollapsed = false
+    private var previousSurfaceBeforeVoice: NotchSurface?
 
     init(notion: NotionClient, voice: VoiceClient = AppleVoiceClient()) {
         self.notion = notion
@@ -105,6 +115,7 @@ final class NotchManager: ObservableObject {
         self.voice = voice
         self.resolvedDraftIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedDraftIdsKey) ?? [])
         self.resolvedProposalIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedProposalIdsKey) ?? [])
+        self.localDraftRewriteVariants = Self.loadLocalDraftRewriteVariants()
     }
 
     func start() async {
@@ -132,20 +143,38 @@ final class NotchManager: ObservableObject {
 
     // MARK: - Voice surface
 
-    /// Push-to-talk start. Switches the expanded card into voice mode and
-    /// kicks the recorder. Called from the global ⌥⌘V monitor.
+    /// Push-to-talk start. Switches into voice mode, starts the recorder
+    /// immediately, then returns. The actual transcription runs in
+    /// `endVoiceCapture` when the user releases ⌥⌘V — that's what was
+    /// missing before (the old path slept for a fixed 8s regardless of
+    /// release, so most captures were padded with silence and the
+    /// recognizer returned empty).
     func beginVoiceCapture() async {
         guard voiceStage != .listening, voiceStage != .transcribing else { return }
+        userCollapsed = false
+        if surface != .voice { previousSurfaceBeforeVoice = surface }
         surface = .voice
         voiceStage = .listening
         voiceTranscript = ""
+        voiceReply = ""
         if state != .expanded {
             transition(to: .expanding)
             await notch?.expand()
             transition(to: .expanded)
         }
 
-        // Amplitude polling — drives the waveform envelope while the user holds.
+        // Kick the recorder. If permissions are missing we surface the error
+        // immediately rather than waiting for a release that produces nothing.
+        do {
+            try await voice.startListening()
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            voiceStage = .failed(msg)
+            NSLog("[CompostAction] voiceCapture startListening failed: %@", msg)
+            return
+        }
+
+        // Amplitude polling — drives the waveform envelope while held.
         ampTimer?.cancel()
         ampTimer = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -156,26 +185,6 @@ final class NotchManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 50_000_000) // ~20 fps
             }
         }
-
-        voiceTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                // Long max — we'll cut it short when the user releases the key.
-                let text = try await self.voice.transcribe(maxDuration: 8.0)
-                await MainActor.run {
-                    self.voiceTranscript = text
-                    self.lastSuccess = .voiceCaptured(text)
-                    self.voiceStage = .replying
-                }
-                NSLog("[CompostAction] voiceCapture success: %@", text)
-                await self.requestVoiceReply(for: text)
-            } catch {
-                let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                await MainActor.run { self.voiceStage = .failed(msg) }
-                NSLog("[CompostAction] voiceCapture failed: %@", msg)
-            }
-            await MainActor.run { self.voiceAmplitude = 0 }
-        }
     }
 
     /// Call the Worker `voiceReply` tool with the recognised transcript +
@@ -184,6 +193,9 @@ final class NotchManager: ObservableObject {
     private func requestVoiceReply(for transcript: String) async {
         guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else {
             await MainActor.run { self.voiceStage = .finished(transcript) }
+            return
+        }
+        if await routeLocalVoiceCommand(transcript) {
             return
         }
         let payload: [String: Any] = [
@@ -213,6 +225,223 @@ final class NotchManager: ObservableObject {
             await MainActor.run { self.voiceStage = .replyFailed(msg) }
             NSLog("[CompostAction] voiceReply failed: %@", msg)
         }
+    }
+
+    private struct LocalVoiceRoute {
+        let scene: NotchSurface
+        let reply: String
+        let mode: String
+        let usedMemory: Bool
+    }
+
+    /// Tiny deterministic router for demo-critical navigation phrases. This
+    /// keeps "show me photos" / "read drafts" snappy and reliable even if the
+    /// assistant reply takes longer than the scene switch should.
+    private func routeLocalVoiceCommand(_ transcript: String) async -> Bool {
+        // Action intents first (tidy / refresh / collapse). These fire a real
+        // worker call or notch-state change instead of switching scenes.
+        if let action = Self.localVoiceAction(for: transcript) {
+            let reply = action.reply
+            voiceReply = reply
+            voiceMode = "general"
+            voiceUsedMemory = false
+            voiceStage = .speaking(reply)
+            NSLog("[CompostAction] voiceAction[%@] -> %@", transcript, action.kind.rawValue)
+            try? await voice.speak(text: reply)
+            switch action.kind {
+            case .tidy:     await refreshAll()
+            case .collapse: await collapseToHidden()
+            }
+            if case .speaking = voiceStage { voiceStage = .finished(reply) }
+            return true
+        }
+
+        // Scene navigation. Navigate FIRST for instant visual feedback,
+        // then ask the Worker `voiceReply` tool for a real grounded
+        // description of what's on the scene (e.g. "5 photos from yesterday:
+        // a Compost bin at Pier 9, Salesforce Tower, …") and speak that.
+        guard let route = Self.localVoiceRoute(for: transcript) else { return false }
+        voiceMode = route.mode
+        voiceUsedMemory = route.usedMemory
+        NSLog("[CompostAction] voiceRoute[%@] -> %@", transcript, String(describing: route.scene))
+        await showRoutedScene(route.scene)
+
+        // Render the canned reply immediately as a holding line so the
+        // user sees feedback while the Worker round-trip runs.
+        voiceReply = route.reply
+        voiceStage = .replying
+
+        let payload: [String: Any] = [
+            "transcript": transcript,
+            "mode": route.mode,
+            "context": sceneContextString(for: route.scene),
+        ]
+        let finalReply: String
+        do {
+            let data = try await notion.invokeTool("voiceReply", input: payload)
+            let parsed = try Self.parseVoiceReply(data)
+            finalReply = parsed.reply
+            await MainActor.run {
+                self.voiceReply = parsed.reply
+                self.voiceMode = parsed.mode
+                self.voiceUsedMemory = parsed.usedMemory
+                self.voiceStage = .speaking(parsed.reply)
+            }
+        } catch {
+            // Worker failed — fall back to the canned reply so the user still
+            // gets audio feedback, but record the error in the action log.
+            NSLog("[CompostAction] voiceReply(routed) failed: %@", String(describing: error))
+            finalReply = route.reply
+            await MainActor.run {
+                self.voiceStage = .speaking(route.reply)
+            }
+        }
+        try? await voice.speak(text: finalReply)
+        await MainActor.run {
+            if case .speaking = self.voiceStage {
+                self.voiceStage = .finished(finalReply)
+            }
+        }
+        return true
+    }
+
+    /// Scene-specific context for `voiceReply`. Each scene gets the data the
+    /// Worker needs to describe it accurately — photo captions for memory,
+    /// draft titles for drafts, etc. Never leaks row IDs or full bodies.
+    private func sceneContextString(for scene: NotchSurface) -> String {
+        switch scene {
+        case .photos:
+            let photos = summary.memoryPhotos.prefix(8)
+            if photos.isEmpty { return "memory_photos=0" }
+            let items = photos.enumerated().map { (i, p) -> String in
+                let cap = p.caption.isEmpty ? p.title : p.caption
+                let when = p.timeLabel()
+                let place = p.tags.first(where: { !$0.lowercased().hasPrefix("compost-") }) ?? ""
+                var parts = ["#\(i+1): \(cap)"]
+                if !when.isEmpty { parts.append("when=\(when)") }
+                if !place.isEmpty { parts.append("place=\(place)") }
+                return parts.joined(separator: ", ")
+            }.joined(separator: " | ")
+            return "memory_photos=\(photos.count); \(items)"
+
+        case .drafts:
+            let drafts = summary.drafts.prefix(3)
+            if drafts.isEmpty { return "drafts=0" }
+            let items = drafts.map { d -> String in
+                "\(d.title) [tone=\(d.activeTone)]"
+            }.joined(separator: " | ")
+            return "drafts=\(drafts.count); \(items)"
+
+        case .cue:
+            guard let cue = summary.currentCue else { return "cue=none" }
+            let head = cue.currentHeading.isEmpty ? cue.sourceTitle : cue.currentHeading
+            return "cue=\(head); in \(cue.minutesUntilNext)m; calm_cue=\(cue.calmCue.prefix(140))"
+
+        case .summary, .voice:
+            return compactSummaryContext()
+        }
+    }
+
+    private struct LocalVoiceAction {
+        enum Kind: String { case tidy, collapse }
+        let kind: Kind
+        let reply: String
+    }
+
+    private static func localVoiceAction(for transcript: String) -> LocalVoiceAction? {
+        let s = transcript
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9 ]"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if s.range(of: #"\b(tidy|tidy up|refresh|refresh tidy|clean up|garden)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceAction(kind: .tidy, reply: "Refreshing tidy proposals.")
+        }
+        if s.range(of: #"\b(collapse|hide|close|go away|dismiss)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceAction(kind: .collapse, reply: "Collapsing the notch.")
+        }
+        return nil
+    }
+
+    private static func localVoiceRoute(for transcript: String) -> LocalVoiceRoute? {
+        // Strip punctuation + lowercase so "show me, photos" matches "photos".
+        let s = transcript
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9 ]"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return nil }
+
+        // Photos / memory pile
+        if s.range(of: #"\b(photo|photos|picture|pictures|memory|memories|slideshow|pile)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceRoute(
+                scene: .photos,
+                reply: "Opening your photo memories.",
+                mode: "memory",
+                usedMemory: true
+            )
+        }
+        // Drafts
+        if s.range(of: #"\b(draft|drafts|rewrite|rewrites|sleep on it|morning review)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceRoute(
+                scene: .drafts,
+                reply: "Opening drafts on ice.",
+                mode: "draft",
+                usedMemory: false
+            )
+        }
+        // Cue / next briefing
+        if s.contains("what did i miss")
+            || s.range(of: #"\b(cue|brief|briefing|calendar|meeting|next|invite|agenda)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceRoute(
+                scene: .cue,
+                reply: "Opening your next briefing.",
+                mode: "briefing",
+                usedMemory: false
+            )
+        }
+        // Summary / everything
+        if s.range(of: #"\b(summary|everything|home|workspace|what is pending|whats pending)\b"#, options: .regularExpression) != nil {
+            return LocalVoiceRoute(
+                scene: .summary,
+                reply: "Here is your workspace summary.",
+                mode: "general",
+                usedMemory: false
+            )
+        }
+        return nil
+    }
+
+    private func showRoutedScene(_ scene: NotchSurface) async {
+        ampTimer?.cancel()
+        ampTimer = nil
+        previousSurfaceBeforeVoice = nil
+        surface = scene
+        if state != .expanded {
+            transition(to: .expanding)
+            await notch?.expand()
+            transition(to: .expanded)
+        }
+    }
+
+    /// Demo-safe typed/quick-action voice route. It uses the same Worker
+    /// `voiceReply` path as speech recognition, but avoids depending on the
+    /// Mac microphone permission during a recorded demo.
+    func askCompost(_ prompt: String) async {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        userCollapsed = false
+        if surface != .voice { previousSurfaceBeforeVoice = surface }
+        surface = .voice
+        voiceTranscript = trimmed
+        voiceReply = ""
+        voiceMode = ""
+        voiceUsedMemory = false
+        voiceStage = .replying
+        if state != .expanded {
+            transition(to: .expanding)
+            await notch?.expand()
+            transition(to: .expanded)
+        }
+        await requestVoiceReply(for: trimmed)
     }
 
     /// Compact, secret-free summary blob passed as `context` to the Worker.
@@ -319,6 +548,10 @@ final class NotchManager: ObservableObject {
     /// poll will re-read the canonical Worker-managed properties.
     private func applyRephrase(draftId: String, displayTone: String, rewrite: String) {
         guard let idx = summary.drafts.firstIndex(where: { $0.id == draftId }) else { return }
+        localDraftRewriteVariants[draftId, default: [:]][displayTone] = rewrite
+        localDraftRewriteVariants[draftId, default: [:]]["__activeTone"] = displayTone
+        persistLocalDraftRewriteVariants()
+
         var updated = summary.drafts
         updated[idx].rewrites[displayTone] = rewrite
         updated[idx].activeTone = displayTone
@@ -337,13 +570,56 @@ final class NotchManager: ObservableObject {
         summary = visible
     }
 
-    /// Push-to-talk end. The transcribe task is already running with its
-    /// own timeout; releasing the key just transitions the visible stage.
+    private static func loadLocalDraftRewriteVariants() -> [String: [String: String]] {
+        guard let data = UserDefaults.standard.data(forKey: localDraftRewriteVariantsKey),
+              let decoded = try? JSONDecoder().decode([String: [String: String]].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private func persistLocalDraftRewriteVariants() {
+        guard let data = try? JSONEncoder().encode(localDraftRewriteVariants) else { return }
+        UserDefaults.standard.set(data, forKey: Self.localDraftRewriteVariantsKey)
+    }
+
+    /// Push-to-talk end. Stops the recorder, runs recognition, then either
+    /// hands the transcript to the local router (photos / drafts / cue /
+    /// tidy / collapse) or — for anything else — to the Worker `voiceReply`
+    /// tool for a grounded answer + TTS speakback.
     func endVoiceCapture() async {
         guard voiceStage == .listening else { return }
         voiceStage = .transcribing
         ampTimer?.cancel()
         ampTimer = nil
+        voiceAmplitude = 0
+
+        voiceTask?.cancel()
+        voiceTask = Task { [weak self] in
+            guard let self else { return }
+            let text: String
+            do {
+                text = try await self.voice.stopAndTranscribe()
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                await MainActor.run { self.voiceStage = .failed(msg) }
+                NSLog("[CompostAction] voiceCapture stopAndTranscribe failed: %@", msg)
+                return
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            await MainActor.run {
+                self.voiceTranscript = trimmed
+                self.lastSuccess = .voiceCaptured(trimmed)
+            }
+            NSLog("[CompostAction] voiceCapture transcript: %@", trimmed.isEmpty ? "(empty)" : trimmed)
+            if trimmed.isEmpty {
+                // Nothing heard — set finished so the UI shows the empty
+                // state instead of staying stuck on "transcribing".
+                await MainActor.run { self.voiceStage = .finished("") }
+                return
+            }
+            await self.requestVoiceReply(for: trimmed)
+        }
     }
 
     /// Exit voice mode and restore the summary surface. Called by the
@@ -355,7 +631,70 @@ final class NotchManager: ObservableObject {
         voiceStage = .idle
         voiceTranscript = ""
         voiceAmplitude = 0
+        surface = previousSurfaceBeforeVoice ?? .summary
+        previousSurfaceBeforeVoice = nil
+    }
+
+    /// Dock-driven scene navigation. Switches the focused surface and
+    /// ensures the notch is expanded. Voice gets a special path that
+    /// starts capture; the others just slot the matching view into the
+    /// expanded shell.
+    func openScene(_ scene: NotchSurface) async {
+        userCollapsed = false
+        if scene == .voice {
+            await beginVoiceCapture()
+            return
+        }
+        // If we were in voice mode, tear it down before switching.
+        if surface == .voice {
+            voiceTask?.cancel(); voiceTask = nil
+            ampTimer?.cancel(); ampTimer = nil
+            voice.stopSpeaking()
+            voiceStage = .idle
+            voiceTranscript = ""
+            voiceAmplitude = 0
+            previousSurfaceBeforeVoice = nil
+        }
+        surface = scene
+        if state != .expanded {
+            transition(to: .expanding)
+            await notch?.expand()
+            transition(to: .expanded)
+        }
+    }
+
+    /// Dock-driven collapse. Shrinks the notch back to the peek capsule so
+    /// the user still has a visible leaf badge they can tap to expand, and
+    /// the floating dock stays in place. Only fully hides the notch when
+    /// there is genuinely nothing pending.
+    func collapseToHidden() async {
+        userCollapsed = true
+        if surface == .voice { exitVoice() }
         surface = .summary
+        let total = summary.proposalCount + summary.draftCount + summary.memoryCount + (summary.digestReady ? 1 : 0)
+        if total > 0 {
+            transition(to: .peek(badge: total))
+            await notch?.compact()
+        } else {
+            await notch?.hide()
+            transition(to: .hidden)
+        }
+    }
+
+    var isVisible: Bool {
+        switch state {
+        case .hidden: return false
+        default: return true
+        }
+    }
+
+    /// Whether the expanded card is up (vs collapsed to peek or hidden).
+    /// Dock uses this to flip Collapse ↔ Expand.
+    var isExpanded: Bool {
+        switch state {
+        case .expanded, .expanding: return true
+        default: return false
+        }
     }
 
     // MARK: - Memory tagging
@@ -388,7 +727,20 @@ final class NotchManager: ObservableObject {
     // MARK: - State transitions
 
     private func applySummary(_ s: NotchSummary) async {
-        let visibleDrafts = s.drafts.filter { !resolvedDraftIds.contains($0.id) }
+        let visibleDrafts = s.drafts
+            .filter { !resolvedDraftIds.contains($0.id) }
+            .map { draft in
+                var merged = draft
+                if let local = localDraftRewriteVariants[draft.id] {
+                    for (tone, rewrite) in local where tone != "__activeTone" && !rewrite.isEmpty {
+                        merged.rewrites[tone] = rewrite
+                    }
+                    if let active = local["__activeTone"], !active.isEmpty {
+                        merged.activeTone = active
+                    }
+                }
+                return merged
+            }
         let visibleProposals = s.proposals.filter {
             // Optimistic-hide: drop rows we already applied this session.
             // Keyed by proposalId (the worker addresses by Proposal ID, not
@@ -426,6 +778,11 @@ final class NotchManager: ObservableObject {
         }
         let liveDraftIds = Set(visible.drafts.map { $0.id })
         draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
+        let liveLocalVariants = localDraftRewriteVariants.filter { liveDraftIds.contains($0.key) }
+        if liveLocalVariants.count != localDraftRewriteVariants.count {
+            localDraftRewriteVariants = liveLocalVariants
+            persistLocalDraftRewriteVariants()
+        }
         let liveMemoryIds = Set(visible.memory.map { $0.id })
         memoryErrors = memoryErrors.filter { liveMemoryIds.contains($0.key) }
         let total = visible.proposalCount + visible.draftCount + visible.memoryCount + (visible.digestReady ? 1 : 0)
@@ -434,6 +791,9 @@ final class NotchManager: ObservableObject {
                 await notch?.hide()
                 transition(to: .hidden)
             }
+            return
+        }
+        if userCollapsed {
             return
         }
 
@@ -459,7 +819,7 @@ final class NotchManager: ObservableObject {
     }
 
     func greet() async {
-        guard summary.hasAnything else { return }
+        guard summary.hasAnything, !userCollapsed else { return }
         transition(to: .expanding)
         await notch?.expand()
         transition(to: .expanded)
@@ -481,7 +841,9 @@ final class NotchManager: ObservableObject {
         }
     }
 
-    /// "Refresh" button. Fires `tidyNow({})` and `refreshBridge({surface:"all"})`
+    /// "Refresh" button. Fires `tidyNow({})` and the fast bridge refresh for
+    /// memory. Cue remains Worker-sync-managed; the Notion sync or a manual
+    /// `ntn workers sync trigger cue` publishes those rows.
     /// in parallel and aggregates the result. Semantics are honest:
     ///   • tidyNow failure → red error, no success ping
     ///   • refreshBridge ok=false with non-empty errors → red error
@@ -553,7 +915,7 @@ final class NotchManager: ObservableObject {
 
     private func doInvokeBridge() async -> Result<BridgeReply, Error> {
         do {
-            let data = try await notion.invokeTool("refreshBridge", input: ["surface": "all"])
+            let data = try await notion.invokeTool("refreshBridge", input: ["surface": "memory"])
             return .success(Self.parseBridge(data))
         } catch {
             return .failure(error)
@@ -732,6 +1094,7 @@ final class NotchManager: ObservableObject {
     }
 
     private func expand() async {
+        userCollapsed = false
         transition(to: .expanding)
         await notch?.expand()
         transition(to: .expanded)
@@ -739,7 +1102,7 @@ final class NotchManager: ObservableObject {
 
     private func retract() async {
         transition(to: .retracting)
-        let total = summary.proposalCount + summary.draftCount + (summary.digestReady ? 1 : 0)
+        let total = summary.proposalCount + summary.draftCount + summary.memoryCount + (summary.digestReady ? 1 : 0)
         if total > 0 {
             transition(to: .peek(badge: total))
             await notch?.compact()
@@ -786,6 +1149,9 @@ struct ContentRouter: View {
             switch manager.surface {
             case .voice:   VoiceView(manager: manager)
             case .summary: ExpandedView(manager: manager)
+            case .cue:     CueScene(manager: manager)
+            case .drafts:  DraftsScene(manager: manager)
+            case .photos:  PhotosScene(manager: manager)
             }
         }
     }

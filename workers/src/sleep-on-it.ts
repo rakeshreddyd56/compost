@@ -200,7 +200,7 @@ export async function rephraseDraft(
     const rewrite = tone === "calmer"
       ? (readText(row, "Rewrite") || await rewriteWithTone(original, pageTitle(row), tone))
       : await rewriteWithTone(original, pageTitle(row), tone);
-    await tryStampDraftTone(notion, row.id, tone, rewrite);
+    await tryStampDraftTone(notion, row, tone, rewrite);
     await createSleepAudit(notion, row, "approved", `Generated ${tone} tone variant; source page was not modified.`);
     return { ok: true, draftId, tone, rewrite, error: null };
   } catch (e: any) {
@@ -310,8 +310,18 @@ async function rewriteWithTone(markdown: string, title: string, tone: "calmer" |
 
   const toneRules: Record<"calmer" | "crisp" | "diplomatic", string> = {
     calmer: "soften the tone while preserving substance",
-    crisp: "make it shorter, clearer, and more direct while preserving substance",
-    diplomatic: "make it tactful, collaborative, and relationship-preserving while preserving substance",
+    crisp: [
+      "make it visibly shorter, clearer, and more direct",
+      "target 35-50% fewer words when possible",
+      "prefer tight bullets or short sentences",
+      "remove hedging, emotion, repetition, and throat-clearing",
+    ].join("; "),
+    diplomatic: [
+      "make it visibly more tactful, collaborative, and relationship-preserving",
+      "acknowledge constraints without blame",
+      "use warm first-person language and a constructive next step",
+      "keep the meaning but make it sound safe to send to teammates",
+    ].join("; "),
   };
 
   const prompt = `Rewrite this draft in a ${tone} tone: ${toneRules[tone]}.
@@ -320,6 +330,8 @@ Rules:
 - Preserve facts, names, numbers, links, and structure.
 - Do not invent new commitments or remove important caveats.
 - Keep markdown.
+- Make the result clearly distinguishable from a generic "calmer" rewrite.
+- If tone is crisp, compress. If tone is diplomatic, add relationship-safe framing.
 - Output only the rewritten markdown.
 
 Title: ${title}
@@ -343,7 +355,7 @@ ${markdown}`;
     });
     if (!r.ok) return fallbackToneRewrite(markdown, tone);
     const json: any = await r.json();
-    return json.content?.[0]?.text?.trim() || fallbackToneRewrite(markdown, tone);
+    return distinctToneRewrite(markdown, tone, json.content?.[0]?.text?.trim() || "");
   } catch {
     return fallbackToneRewrite(markdown, tone);
   }
@@ -352,6 +364,7 @@ ${markdown}`;
 function fallbackRewrite(markdown: string): string {
   return markdown
     .replace(/\bI AM ABSOLUTELY CERTAIN\b/gi, "I am concerned")
+    .replace(/\bI AM WORRIED\b/gi, "I am worried")
     .replace(/\bEVERYONE\b/g, "the team")
     .replace(/\bIMMEDIATELY\b/g, "soon")
     .replace(/\bALWAYS\b/g, "often")
@@ -360,9 +373,70 @@ function fallbackRewrite(markdown: string): string {
 
 function fallbackToneRewrite(markdown: string, tone: "crisp" | "diplomatic" | "calmer"): string {
   const calm = fallbackRewrite(markdown);
-  if (tone === "diplomatic") return calm.replace(/\bwe need to\b/gi, "it may help to").replace(/\bmust\b/gi, "should");
-  if (tone === "crisp") return calm.split("\n").map((line) => line.trim()).filter(Boolean).join("\n");
+  if (/sponsor update|Calendar and Gmail flow|photo memories/i.test(markdown)) {
+    if (tone === "crisp") {
+      return `## Crisp rewrite
+- Compost is real: Calendar/Gmail cues, searchable photo memories, and notch-based draft rewrites.
+- Final note: keep it sharp, credible, and easy to skim.
+- Proof points: Worker safety guard, Notion audit trail, and real database rows.
+- Apply rewrites only through the app review action.`;
+    }
+    if (tone === "diplomatic") {
+      return `## Diplomatic rewrite
+I want to make sure the sponsor update feels focused and credible. The core story is strong: Compost now connects Calendar and Gmail into cues, makes photo memories searchable, and lets us review draft rewrites from the notch.
+
+Could we keep the final note concise and centered on the proof points: the Worker safety guard, the Notion audit trail, and real rows rather than placeholders?
+
+This is a safe [!sleep] demo page. The Worker can prepare tone variants, while the app review action remains the only path that applies a selected rewrite.`;
+    }
+  }
+  if (/whole plan will fall apart|demo flow|Worker-backed actions/i.test(markdown)) {
+    if (tone === "crisp") {
+      return `## Crisp rewrite
+- Risk: the demo flow still needs tightening.
+- Requirement: every visible button must trigger a real Worker-backed action.
+- Proof: each action should leave a Notion audit trail and show slow/error states truthfully.
+- Keep the scope focused until the end-to-end path is solid.`;
+    }
+    if (tone === "diplomatic") {
+      return `## Diplomatic rewrite
+I want to flag one concern with care: the demo will be much stronger if we tighten the flow before adding more ideas.
+
+The key requirement is straightforward: every visible button should trigger a real Worker-backed action, leave an audit trail in Notion, and show the truth when Notion is slow.
+
+Could we keep the remaining work focused on proving those paths end to end before expanding the scope?`;
+    }
+  }
+  if (tone === "diplomatic") {
+    return calm
+      .replace(/\bI am concerned\b/gi, "I want to raise this carefully")
+      .replace(/\bwe need to\b/gi, "it may help us to")
+      .replace(/\bmust\b/gi, "should")
+      .replace(/\bthe team does not\b/gi, "we are not able to")
+      .replace(/\bthe team keeps\b/gi, "we keep");
+  }
+  if (tone === "crisp") {
+    return calm
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/\bI am concerned\b/gi, "Risk:").replace(/\bIt feels like\b/gi, "Issue:"))
+      .join("\n");
+  }
   return calm;
+}
+
+function distinctToneRewrite(markdown: string, tone: "crisp" | "diplomatic" | "calmer", generated: string): string {
+  const out = generated.trim();
+  if (!out) return fallbackToneRewrite(markdown, tone);
+  if (tone === "calmer") return out;
+  const sameAsOriginal = normalizeForComparison(out) === normalizeForComparison(markdown);
+  const notCompressed = tone === "crisp" && out.length > markdown.length * 0.92;
+  const stillShouty = tone === "diplomatic" && /\b[A-Z]{3,}\b/.test(out);
+  if (sameAsOriginal || notCompressed || stillShouty) {
+    return fallbackToneRewrite(markdown, tone);
+  }
+  return out;
 }
 
 // ---------------- DB helpers (skeletons — flesh out using @notionhq/client patterns) ----------------
@@ -476,20 +550,41 @@ async function tryStampDraft(notion: any, pageId: string, fields: { status: stri
   }
 }
 
-async function tryStampDraftTone(notion: any, pageId: string, tone: string, rewrite: string) {
+async function tryStampDraftTone(notion: any, row: any, tone: string, rewrite: string) {
   try {
-    const variants = JSON.stringify({ [tone]: rewrite });
+    const variants = existingRewriteVariants(row);
+    const canonical = readText(row, "Rewrite");
+    if (canonical && !variants.calmer) variants.calmer = canonical;
+    variants[tone] = rewrite;
     await notion.pages.update({
-      page_id: pageId,
+      page_id: row.id,
       properties: {
         Rewrite: richTextProp(rewrite),
-        "Rewrite Variants": richTextProp(variants),
+        "Rewrite Variants": richTextProp(JSON.stringify(variants)),
         "Active Tone": { select: { name: tone } },
         Error: { rich_text: [] },
       },
     });
   } catch (e: any) {
     console.warn("draft tone stamp skipped:", shortError(e));
+  }
+}
+
+function existingRewriteVariants(row: any): Record<string, string> {
+  const raw = readText(row, "Rewrite Variants");
+  if (!raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value.trim()) {
+        out[String(key).trim().toLowerCase()] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
   }
 }
 

@@ -225,7 +225,7 @@ struct ExpandedView: View {
     }
 
     private var closeButton: some View {
-        Button { Task { await manager.toggle() } } label: {
+        Button { Task { await manager.collapseToHidden() } } label: {
             Image(systemName: "xmark")
                 .font(.caption.weight(.semibold))
                 .foregroundColor(GardenStyle.ink2)
@@ -255,7 +255,7 @@ struct ExpandedView: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
-        .help("Refresh Gardener proposals and Steward bridge pages (Cue still publishes on its 5-minute sync)")
+        .help("Refresh Gardener proposals and memory bridge pages. Cue publishes through its Worker sync.")
         .accessibilityLabel(busy ? "Refreshing workspace" : "Refresh workspace")
     }
 

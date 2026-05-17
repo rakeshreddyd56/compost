@@ -23,7 +23,7 @@ struct NotchSummary {
 
     /// Photo-only slice of memory for the slideshow surface.
     var memoryPhotos: [MemoryItem] {
-        memory.filter { $0.kind == .photo && $0.assetURL != nil }
+        memory.filter { $0.kind == .photo }
     }
 
     static let empty = NotchSummary(
@@ -46,11 +46,23 @@ struct Proposal: Identifiable {
 
     init?(_ page: NotionPage) {
         self.id = page.id
-        self.proposalId = page.properties["Proposal ID"]?.plainText ?? ""
-        self.title = page.properties["Title"]?.plainText ?? "Untitled"
-        self.action = page.properties["Action"]?.plainText ?? "archive"
+        let proposalId = page.properties["Proposal ID"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = page.properties["Title"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let action = page.properties["Action"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let targetPageId = page.properties["Target Page ID"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // Notion agents can create body-only proposal pages when managed DB
+        // properties are read-only to them. Those are useful audit artifacts,
+        // but the app can only apply canonical Worker-stamped proposal rows.
+        guard !proposalId.isEmpty, !title.isEmpty, !action.isEmpty, !targetPageId.isEmpty else {
+            return nil
+        }
+
+        self.proposalId = proposalId
+        self.title = title
+        self.action = action
         self.reason = page.properties["Reason"]?.plainText ?? ""
-        self.targetPageId = page.properties["Target Page ID"]?.plainText ?? ""
+        self.targetPageId = targetPageId
     }
 }
 
@@ -90,34 +102,49 @@ struct FrozenDraft: Identifiable {
 
     init?(_ page: NotionPage) {
         self.id = page.id
-        self.title = page.properties["Title"]?.plainText ?? "Untitled"
-        self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
-        self.original = page.properties["Original Snapshot"]?.plainText ?? ""
+        let title = page.properties["Title"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sourcePageId = page.properties["Source Page ID"]?.plainText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let original = page.properties["Original Snapshot"]?.plainText ?? ""
+        self.title = title.isEmpty ? "Untitled draft" : title
+        self.sourcePageId = sourcePageId
+        self.original = original
         self.frozenAt = page.properties["Frozen At"]?.date?.start ?? ""
 
         let activeRaw = page.properties["Active Tone"]?.plainText ?? ""
-        let active = activeRaw.isEmpty ? "Calmer" : activeRaw
+        let active = Self.displayToneName(activeRaw)
         self.activeTone = active
 
         var dict: [String: String] = [:]
 
         // Variants blob (future). When present, prefer it as the source of
-        // truth. The contract is a JSON object { "Calmer": "...", ... }.
+        // truth. The Worker contract uses lowercase keys, but older app
+        // builds used display-case keys, so normalize both into display names.
         let variantsRaw = page.properties["Rewrite Variants"]?.plainText ?? ""
         if !variantsRaw.isEmpty,
            let data = variantsRaw.data(using: .utf8),
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
-            dict = parsed
+            dict = Dictionary(uniqueKeysWithValues: parsed.map { (Self.displayToneName($0.key), $0.value) })
         }
 
         let canonical = page.properties["Rewrite"]?.plainText ?? ""
         if !canonical.isEmpty, dict[active] == nil {
             dict[active] = canonical
         }
-        if dict.isEmpty {
-            dict["Calmer"] = canonical
-        }
+        if dict.isEmpty, !canonical.isEmpty { dict["Calmer"] = canonical }
+
+        // Same body-only issue as proposals: Notion AI can create draft pages
+        // with the structured fields in the page content, but Worker/app action
+        // paths require canonical DB properties.
+        guard !sourcePageId.isEmpty, !original.isEmpty, !dict.isEmpty else { return nil }
         self.rewrites = dict
+    }
+
+    private static func displayToneName(_ raw: String) -> String {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "crisp": return "Crisp"
+        case "diplomatic": return "Diplomatic"
+        default: return "Calmer"
+        }
     }
 }
 

@@ -63,6 +63,32 @@ final class AppleVoiceClient: NSObject, VoiceClient {
         return try await Self.recognize(url: url)
     }
 
+    /// Push-to-talk start. Permission checks + recorder boot. Does not block.
+    func startListening() async throws {
+        guard await AudioRecorder.ensureMicrophonePermission() else {
+            throw VoiceError.microphoneDenied
+        }
+        try await Self.ensureSpeechAuth()
+        try recorder.start()
+    }
+
+    /// Push-to-talk end. Stops recording, runs recognition on the captured
+    /// file, returns the best transcript (or "" when nothing was heard).
+    /// Cleans up the temp .m4a regardless of outcome.
+    func stopAndTranscribe() async throws -> String {
+        guard let url = recorder.stop() else {
+            throw VoiceError.transcribeFailed("recorder produced no file")
+        }
+        defer { recorder.discard() }
+        do {
+            return try await Self.recognize(url: url)
+        } catch {
+            // Surface the underlying recognizer error rather than swallowing
+            // it into the generic "no speech detected" UI string.
+            throw error
+        }
+    }
+
     private static func recognize(url: URL) async throws -> String {
         guard let recognizer = SFSpeechRecognizer(locale: .current), recognizer.isAvailable else {
             throw VoiceError.recognizerUnavailable

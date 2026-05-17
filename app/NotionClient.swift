@@ -112,11 +112,20 @@ final class NotionClient {
 
     func fetchReadyDrafts() async throws -> [FrozenDraft] {
         let pages = try await queryDatabase(ids.frozenDrafts, filter: [
-            "property": "Status",
-            "select": ["equals": "frozen"],
+            "or": [
+                [
+                    "property": "Status",
+                    "select": ["equals": "frozen"],
+                ],
+                [
+                    "property": "Status",
+                    "select": ["equals": "ready"],
+                ],
+            ],
         ])
-        // Newest `Frozen At` first so the most recent late-night write shows
-        // at the top. The string is ISO-8601 → lexicographic sort is correct.
+        // Morning review promotes rows from `frozen` to `ready`; both are
+        // still actionable in the notch until the user keeps or applies them.
+        // Newest `Frozen At` first so the freshest draft shows at the top.
         return pages
             .compactMap(FrozenDraft.init)
             .sorted { $0.frozenAt > $1.frozenAt }

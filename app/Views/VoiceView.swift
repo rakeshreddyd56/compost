@@ -1,11 +1,18 @@
 //
 //  VoiceView.swift
-//  Compost — expanded notch voice surface (push-to-talk ⌥⌘V).
+//  Compost — expanded notch voice surface, matched to handoff scene 03.
 //
-//  This surface replaces the entire expanded body while active. The user
-//  holds ⌥⌘V to record, releases to transcribe. The recognized text is
-//  the receipt — voice does NOT mutate Notion in v0.5. Quick-action pills
-//  route to the matching expanded surface and exit voice mode.
+//  Press ⌥⌘V → recorder starts → mascot listens.
+//  Release         → SFSpeechRecognizer transcribes.
+//  Then            → Worker `voiceReply` returns a real Claude answer.
+//  Then            → AVSpeechSynthesizer speaks it while we type it out.
+//
+//  Stages map 1:1 to the prototype labels in `scenes.jsx`:
+//    listening   → "Listening"          rose dot
+//    transcribing→ "Transcribing"       amber dot   (audio→text)
+//    replying    → "Thinking"           amber dot   + italic "checking the pile…"
+//    speaking    → "Compost"            sage  dot   + progressive type-out
+//    finished    → "Compost · finished" sage  dot
 //
 
 import SwiftUI
@@ -16,7 +23,7 @@ enum VoiceStage: Equatable {
     case transcribing
     case replying          // voiceReply Worker tool in-flight
     case speaking(String)  // TTS playing the worker reply
-    case finished(String)  // either transcript-only (legacy) or reply done
+    case finished(String)  // reply done OR transcript-only empty case
     case replyFailed(String)
     case failed(String)
 
@@ -26,8 +33,8 @@ enum VoiceStage: Equatable {
         case .listening:    return "Listening"
         case .transcribing: return "Transcribing"
         case .replying:     return "Thinking"
-        case .speaking:     return "Speaking"
-        case .finished:     return "Done"
+        case .speaking:     return "Compost"
+        case .finished:     return "Compost · finished"
         case .replyFailed:  return "Reply failed"
         case .failed:       return "Capture failed"
         }
@@ -35,112 +42,47 @@ enum VoiceStage: Equatable {
 
     var dotColor: Color {
         switch self {
-        case .idle, .finished, .speaking: return GardenStyle.sage400
-        case .listening:                   return GardenStyle.accentRose
-        case .transcribing, .replying:     return GardenStyle.accentAmber
-        case .failed, .replyFailed:        return GardenStyle.accentRose
+        case .listening:                  return GardenStyle.accentRose
+        case .transcribing, .replying:    return GardenStyle.accentAmber
+        case .speaking, .finished, .idle: return GardenStyle.sage400
+        case .failed, .replyFailed:       return GardenStyle.accentRose
         }
     }
 }
 
 struct VoiceView: View {
     @ObservedObject var manager: NotchManager
+    @State private var typed: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             mascotSlot
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 stagePill
                 transcript
                 waveform
-                replyPane
                 quickActions
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, GardenStyle.cardPadding)
         .padding(.vertical, 14)
-        .frame(width: 440)
+        .frame(width: GardenStyle.expandedWidth)
         .background(GardenStyle.notchBg)
-        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.expandedR, style: .continuous))
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: GardenStyle.expandedR,
+                bottomTrailingRadius: GardenStyle.expandedR,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+        )
+        .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
+        .onChange(of: manager.voiceStage) { handleStageChange($0) }
+        .onAppear { handleStageChange(manager.voiceStage) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Voice mode, \(manager.voiceStage.label)")
-    }
-
-    /// Reply pane — surfaces voiceReply progress + the actual Worker reply.
-    /// Hidden during pure listening; appears once the transcript is in.
-    @ViewBuilder
-    private var replyPane: some View {
-        switch manager.voiceStage {
-        case .replying:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small).tint(GardenStyle.sage300)
-                Text("Compost is thinking…")
-                    .font(.caption)
-                    .foregroundColor(GardenStyle.ink2)
-                Spacer()
-            }
-            .padding(8)
-            .background(GardenStyle.card)
-            .cornerRadius(GardenStyle.cornerRadius)
-
-        case .speaking(let reply), .finished(let reply) where reply == manager.voiceReply && !manager.voiceReply.isEmpty:
-            replyBubble(text: reply, speaking: { if case .speaking = manager.voiceStage { return true } else { return false } }())
-
-        case .replyFailed(let err):
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundColor(GardenStyle.accentRose)
-                Text(err)
-                    .font(.caption2)
-                    .foregroundColor(GardenStyle.ink2)
-                    .lineLimit(3)
-                Spacer()
-            }
-            .padding(8)
-            .background(GardenStyle.accentRose.opacity(0.08))
-            .cornerRadius(GardenStyle.cornerRadius)
-
-        default:
-            EmptyView()
-        }
-    }
-
-    private func replyBubble(text: String, speaking: Bool) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: speaking ? "speaker.wave.2.fill" : "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundColor(GardenStyle.sage300)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(text)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(GardenStyle.ink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !manager.voiceMode.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("mode: \(manager.voiceMode)")
-                            .font(.caption2)
-                            .foregroundColor(GardenStyle.ink3)
-                        if manager.voiceUsedMemory {
-                            Text("· memory used")
-                                .font(.caption2)
-                                .foregroundColor(GardenStyle.accentGold)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GardenStyle.sage400.opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
-                .strokeBorder(GardenStyle.sage400.opacity(0.30), lineWidth: 0.5)
-        )
-        .cornerRadius(GardenStyle.cornerRadius)
-        .accessibilityLabel("Compost reply: \(text)")
     }
 
     // MARK: - Mascot with sage halo
@@ -156,20 +98,22 @@ struct VoiceView: View {
             .opacity(manager.voiceStage == .idle ? 0.5 : 1)
             .scaleEffect(manager.voiceStage == .idle ? 0.95 : 1.05)
             .animation(GardenStyle.glow, value: manager.voiceStage)
-            Mascot(size: 84, mood: mascotMood)
+            Mascot(size: 84, mood: mascotMood, bobble: isSpeaking)
         }
         .frame(width: 110, height: 110)
         .accessibilityHidden(true)
     }
 
+    private var isSpeaking: Bool {
+        if case .speaking = manager.voiceStage { return true }
+        return false
+    }
+
     private var mascotMood: Mascot.Mood {
         switch manager.voiceStage {
-        case .listening, .transcribing, .replying, .idle:
-            return .calm
-        case .speaking, .finished:
-            return .nudging
-        case .failed, .replyFailed:
-            return .alert
+        case .listening, .transcribing, .replying, .idle: return .calm
+        case .speaking, .finished:                         return .nudging
+        case .failed, .replyFailed:                        return .alert
         }
     }
 
@@ -180,7 +124,7 @@ struct VoiceView: View {
             Circle()
                 .fill(manager.voiceStage.dotColor)
                 .frame(width: 7, height: 7)
-                .modifier(PulseModifier(active: isStageBusy(manager.voiceStage)))
+                .modifier(PulseDot(active: isBusy))
             Text(manager.voiceStage.label.uppercased())
                 .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .tracking(1)
@@ -192,7 +136,14 @@ struct VoiceView: View {
         }
     }
 
-    // MARK: - Transcript
+    private var isBusy: Bool {
+        switch manager.voiceStage {
+        case .listening, .transcribing, .replying, .speaking: return true
+        default: return false
+        }
+    }
+
+    // MARK: - Transcript (single live region — matches prototype)
 
     @ViewBuilder
     private var transcript: some View {
@@ -203,27 +154,53 @@ struct VoiceView: View {
                 .foregroundColor(GardenStyle.ink2)
 
         case .listening:
-            Text(manager.voiceTranscript.isEmpty
-                 ? "listening…"
-                 : manager.voiceTranscript)
-                .font(.system(size: 15, weight: .regular, design: .rounded))
-                .foregroundColor(GardenStyle.ink)
-                .italic(manager.voiceTranscript.isEmpty)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 2) {
+                Text(manager.voiceTranscript.isEmpty ? "listening…" : manager.voiceTranscript)
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                    .italic(manager.voiceTranscript.isEmpty)
+                    .foregroundColor(GardenStyle.ink)
+                Caret()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
         case .transcribing:
-            Text("transcribing…")
-                .font(.system(size: 15, weight: .regular, design: .rounded))
-                .foregroundColor(GardenStyle.ink3)
-                .italic()
+            HStack(spacing: 2) {
+                Text(manager.voiceTranscript.isEmpty ? "transcribing…" : manager.voiceTranscript)
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                    .italic(manager.voiceTranscript.isEmpty)
+                    .foregroundColor(GardenStyle.ink2)
+                Caret()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-        case .replying, .speaking, .finished, .replyFailed:
-            // Once we have the transcript, keep it visible as the receipt
-            // for whatever the reply pane shows below.
-            Text(manager.voiceTranscript.isEmpty ? "(no speech detected)" : manager.voiceTranscript)
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundColor(GardenStyle.ink2)
+        case .replying:
+            // Prototype's "thinking" stage — italic gray placeholder.
+            Text("checking the pile…")
+                .font(.system(size: 15, weight: .regular, design: .rounded))
+                .italic()
+                .foregroundColor(GardenStyle.ink3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .speaking:
+            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                Text(typed)
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                    .foregroundColor(GardenStyle.ink)
+                Caret()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .finished(let reply):
+            Text(reply.isEmpty ? "(no speech detected)" : reply)
+                .font(.system(size: 15, weight: .regular, design: .rounded))
+                .foregroundColor(GardenStyle.ink)
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .replyFailed(let err):
+            Text(err)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundColor(GardenStyle.accentRose)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case .failed(let err):
@@ -234,11 +211,47 @@ struct VoiceView: View {
         }
     }
 
+    // MARK: - Type-out driver
+
+    /// On stage transitions, drive a progressive type-out of the reply at
+    /// ~24ms/char (matches prototype). Listening/transcribing don't type-out
+    /// (the recognizer's partial results would, but we're file-based right now,
+    /// so transcript appears all at once on release).
+    private func handleStageChange(_ stage: VoiceStage) {
+        switch stage {
+        case .speaking(let full), .finished(let full):
+            startTypeOut(full)
+        case .replying, .listening, .transcribing, .idle:
+            typed = ""
+        case .failed, .replyFailed:
+            typed = ""
+        }
+    }
+
+    @State private var typeTask: Task<Void, Never>?
+
+    private func startTypeOut(_ text: String) {
+        typeTask?.cancel()
+        guard !text.isEmpty else { typed = ""; return }
+        if GardenStyle.reduceMotion {
+            typed = text
+            return
+        }
+        typed = ""
+        typeTask = Task { @MainActor in
+            for (i, _) in text.enumerated() {
+                if Task.isCancelled { return }
+                typed = String(text.prefix(i + 1))
+                try? await Task.sleep(nanoseconds: 24_000_000) // 24ms/char
+            }
+        }
+    }
+
     // MARK: - Waveform
 
     private var waveform: some View {
         Waveform(
-            active: isStageBusy(manager.voiceStage),
+            active: isBusy,
             color: waveformColor,
             amplitudeProvider: { manager.voiceAmplitude }
         )
@@ -247,38 +260,24 @@ struct VoiceView: View {
 
     private var waveformColor: Color {
         switch manager.voiceStage {
-        case .listening:           return GardenStyle.accentRose
-        case .transcribing, .replying: return GardenStyle.accentAmber
-        case .speaking:            return GardenStyle.sage400
-        default:                   return GardenStyle.sage400
+        case .listening:                  return GardenStyle.accentRose
+        case .transcribing, .replying:    return GardenStyle.accentAmber
+        default:                          return GardenStyle.sage400
         }
     }
 
-    /// True for any stage that should keep the waveform alive (mic input
-    /// or worker round-trip). Used by both the pulse modifier and the
-    /// waveform's active flag.
-    private func isStageBusy(_ stage: VoiceStage) -> Bool {
-        switch stage {
-        case .listening, .transcribing, .replying, .speaking: return true
-        default: return false
-        }
-    }
-
-    // MARK: - Quick actions (router into other surfaces)
+    // MARK: - Quick actions (route to surfaces)
 
     private var quickActions: some View {
         HStack(spacing: GardenStyle.actionRowGap) {
-            QuickPill("Tidy now") {
-                manager.exitVoice()
-                Task { await manager.tidyNow() }
-            }
             QuickPill("What did I miss?") {
-                manager.exitVoice()
-                Task { await manager.toggle() }
+                Task { await manager.openScene(.cue) }
             }
             QuickPill("Read drafts") {
-                manager.exitVoice()
-                Task { await manager.toggle() }
+                Task { await manager.openScene(.drafts) }
+            }
+            QuickPill("Show photos") {
+                Task { await manager.openScene(.photos) }
             }
             Spacer()
             Button("Tap to end") { manager.exitVoice() }
@@ -286,6 +285,25 @@ struct VoiceView: View {
                 .font(.caption2)
                 .foregroundColor(GardenStyle.ink3)
         }
+    }
+}
+
+// MARK: - Caret blinker
+
+private struct Caret: View {
+    @State private var on = true
+    var body: some View {
+        Rectangle()
+            .fill(GardenStyle.sage400)
+            .frame(width: 2, height: 16)
+            .opacity(on ? 1 : 0)
+            .onAppear {
+                guard !GardenStyle.reduceMotion else { return }
+                withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: true)) {
+                    on.toggle()
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -303,25 +321,20 @@ private struct QuickPill: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.caption.weight(.medium))
-                .foregroundColor(GardenStyle.ink2)
-                .padding(.horizontal, 10)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundColor(GardenStyle.ink)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 5)
-                .background(GardenStyle.card)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(GardenStyle.hair, lineWidth: 0.5)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .background(Capsule().fill(Color.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 }
 
-// MARK: - Pulse modifier
+// MARK: - Pulse dot
 
-private struct PulseModifier: ViewModifier {
+private struct PulseDot: ViewModifier {
     let active: Bool
     @State private var on = false
 
