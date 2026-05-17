@@ -180,7 +180,7 @@ struct DraftRow: View {
         .disabled(!hasRewrite)
         .help(hasRewrite
               ? "Show the \(tone) rewrite"
-              : "No \(tone) rewrite available — needs the rephraseDraft worker tool")
+              : "Requires rephraseDraft worker.")
         .accessibilityLabel("Tone \(tone), \(isActive ? "selected" : (hasRewrite ? "available" : "unavailable"))")
     }
 

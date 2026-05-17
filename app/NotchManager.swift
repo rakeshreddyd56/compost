@@ -84,6 +84,12 @@ final class NotchManager: ObservableObject {
     private var ampTimer: Task<Void, Never>?
     private static let resolvedDraftIdsKey = "compost.resolvedDraftIds"
     private var resolvedDraftIds: Set<String>
+    // Optimistic-hide for proposals: when applyProposal returns ok, we drop
+    // the row from the visible summary immediately so the user gets a clean
+    // "removed" beat instead of waiting for the next poller tick. Stored in
+    // UserDefaults so a restart mid-demo doesn't resurrect just-applied rows.
+    private static let resolvedProposalIdsKey = "compost.resolvedProposalIds"
+    private var resolvedProposalIds: Set<String>
 
     init(notion: NotionClient, voice: VoiceClient = AppleVoiceClient()) {
         self.notion = notion
@@ -93,6 +99,7 @@ final class NotchManager: ObservableObject {
         self.voiceHotkey = VoiceCaptureHotkey()
         self.voice = voice
         self.resolvedDraftIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedDraftIdsKey) ?? [])
+        self.resolvedProposalIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedProposalIdsKey) ?? [])
     }
 
     func start() async {
@@ -136,7 +143,9 @@ final class NotchManager: ObservableObject {
         // Amplitude polling — drives the waveform envelope while the user holds.
         ampTimer?.cancel()
         ampTimer = Task { [weak self] in
-            while let self, await !Task.isCancelled, await self.voiceStage == .listening {
+            while let self, !Task.isCancelled {
+                let stillListening = await MainActor.run { self.voiceStage == .listening }
+                guard stillListening else { break }
                 let amp = (self.voice as? AppleVoiceClient)?.currentAmplitude() ?? 0
                 await MainActor.run { self.voiceAmplitude = amp }
                 try? await Task.sleep(nanoseconds: 50_000_000) // ~20 fps
@@ -215,9 +224,16 @@ final class NotchManager: ObservableObject {
 
     private func applySummary(_ s: NotchSummary) async {
         let visibleDrafts = s.drafts.filter { !resolvedDraftIds.contains($0.id) }
+        let visibleProposals = s.proposals.filter {
+            // Optimistic-hide: drop rows we already applied this session.
+            // Keyed by proposalId (the worker addresses by Proposal ID, not
+            // page id) so the right row vanishes even if Notion takes a tick
+            // to reflect Applied=true.
+            !resolvedProposalIds.contains($0.proposalId)
+        }
         let visible = NotchSummary(
-            proposalCount: s.proposals.count,
-            proposals: s.proposals,
+            proposalCount: visibleProposals.count,
+            proposals: visibleProposals,
             draftCount: visibleDrafts.count,
             drafts: visibleDrafts,
             digestReady: s.digestReady,
@@ -234,6 +250,15 @@ final class NotchManager: ObservableObject {
         // in the summary (applied, archived, or otherwise gone).
         let liveProposalIds = Set(visible.proposals.map { $0.proposalId })
         proposalErrors = proposalErrors.filter { liveProposalIds.contains($0.key) }
+        // Garbage-collect resolvedProposalIds against the raw (pre-filter) list
+        // so we don't accumulate forever — once Notion stops returning the row
+        // we can forget we ever hid it.
+        let rawProposalIds = Set(s.proposals.map { $0.proposalId })
+        let pruned = resolvedProposalIds.filter { rawProposalIds.contains($0) }
+        if pruned != resolvedProposalIds {
+            resolvedProposalIds = pruned
+            UserDefaults.standard.set(Array(resolvedProposalIds), forKey: Self.resolvedProposalIdsKey)
+        }
         let liveDraftIds = Set(visible.drafts.map { $0.id })
         draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
         let liveMemoryIds = Set(visible.memory.map { $0.id })
@@ -335,6 +360,27 @@ final class NotchManager: ObservableObject {
         UserDefaults.standard.set(Array(resolvedDraftIds), forKey: Self.resolvedDraftIdsKey)
     }
 
+    private func markProposalResolved(_ proposalId: String) {
+        guard !proposalId.isEmpty else { return }
+        resolvedProposalIds.insert(proposalId)
+        UserDefaults.standard.set(Array(resolvedProposalIds), forKey: Self.resolvedProposalIdsKey)
+        // Republish so the row disappears immediately rather than waiting
+        // for the next poll cycle.
+        let visible = NotchSummary(
+            proposalCount: summary.proposals.filter { $0.proposalId != proposalId }.count,
+            proposals: summary.proposals.filter { $0.proposalId != proposalId },
+            draftCount: summary.draftCount,
+            drafts: summary.drafts,
+            digestReady: summary.digestReady,
+            digestUrl: summary.digestUrl,
+            currentCue: summary.currentCue,
+            memoryCount: summary.memoryCount,
+            memory: summary.memory,
+            lastError: summary.lastError
+        )
+        summary = visible
+    }
+
     /// Approve and apply a single proposal in one click. Calls the Worker
     /// `applyProposal` tool with the proposal's stable id, tracks per-row
     /// inflight state, and writes any worker error into `proposalErrors[pid]`
@@ -358,6 +404,7 @@ final class NotchManager: ObservableObject {
 
         do {
             _ = try await notion.invokeTool("applyProposal", input: ["proposalId": pid])
+            markProposalResolved(pid)
             lastActionError = nil
             lastSuccess = success
             Task { @MainActor [weak self] in

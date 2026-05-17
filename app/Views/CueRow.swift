@@ -183,13 +183,30 @@ struct CueRow: View {
     // MARK: - Meta row
 
     private var metaRow: some View {
-        HStack {
+        HStack(spacing: 6) {
+            if isFromAgentInbox {
+                Label("from Agent Briefing Inbox", systemImage: "tray")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(GardenStyle.sage300)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(GardenStyle.sage400.opacity(0.14))
+                    .clipShape(Capsule())
+            }
             Spacer()
             Text("[!cue] · \(cue.sourceTitle)")
                 .font(.caption2)
                 .foregroundColor(GardenStyle.ink3)
                 .lineLimit(1)
         }
+    }
+
+    /// True when the cue's source page title matches the agent's bridge page
+    /// convention, so we can attribute the briefing to the Workspace Steward.
+    private var isFromAgentInbox: Bool {
+        let t = cue.sourceTitle.lowercased()
+        return t.contains("agent briefing inbox") || t.contains("[!cue]")
     }
 
     // MARK: - Open source

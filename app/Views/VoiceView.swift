@@ -22,8 +22,8 @@ enum VoiceStage: Equatable {
         case .idle:             return "Idle"
         case .listening:        return "Listening"
         case .transcribing:     return "Transcribing"
-        case .finished:         return "Compost · finished"
-        case .failed:           return "Compost · failed"
+        case .finished:         return "Transcript ready"
+        case .failed:           return "Capture failed"
         }
     }
 
@@ -41,15 +41,18 @@ struct VoiceView: View {
     @ObservedObject var manager: NotchManager
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            mascotSlot
-            VStack(alignment: .leading, spacing: 10) {
-                stagePill
-                transcript
-                waveform
-                quickActions
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 14) {
+                mascotSlot
+                VStack(alignment: .leading, spacing: 10) {
+                    stagePill
+                    transcript
+                    waveform
+                    quickActions
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            replyDisclosure
         }
         .padding(.horizontal, GardenStyle.cardPadding)
         .padding(.vertical, 14)
@@ -58,6 +61,21 @@ struct VoiceView: View {
         .clipShape(RoundedRectangle(cornerRadius: GardenStyle.expandedR, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Voice mode, \(manager.voiceStage.label)")
+    }
+
+    /// Honest footer: voice is transcript-only until a Worker / LLM reply
+    /// route is wired (see INTERFACE.md "voice assistant reply" gap).
+    private var replyDisclosure: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "info.circle")
+                .font(.caption2)
+            Text("Reply unavailable — assistant route not yet wired.")
+                .font(.caption2)
+            Spacer()
+        }
+        .foregroundColor(GardenStyle.ink3)
+        .padding(.top, 2)
+        .padding(.leading, 124)
     }
 
     // MARK: - Mascot with sage halo
