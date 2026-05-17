@@ -56,6 +56,24 @@
 | `Calm Cue` | rich_text | 1-2 line Claude-rephrased card |
 | `Generated At` | date | When this row was last written |
 
+### `notionMemory` — Memory/photo recall
+| Property | Type | Notes |
+|---|---|---|
+| `Title` | title | Human-readable memory title |
+| `Memory ID` | rich_text | Stable worker-managed ID when present |
+| `Source Page ID` | rich_text | Source `[!memory]` page ID |
+| `Type` | select | `photo` \| `note` \| `clip` |
+| `Content` | rich_text | Image URL, note excerpt, or clip text |
+| `Caption` | rich_text | Short app-facing caption |
+| `Captured At` | date | Source page timestamp, edit time, or captured time |
+| `Tags` | multi_select | `idea` \| `todo` \| `reference` \| `moment` |
+| `Embedding ID` | rich_text | Optional recall cache key |
+
+The source of truth is the regular Notion page under `[!memory] Compost Memory
+Inbox`; the Worker writes rows here. Notion Custom Agents may add captions or
+metadata to source pages, but should avoid manually duplicating `notionMemory`
+rows unless the Worker is unavailable.
+
 ## Worker tools (callable by app or Notion Custom Agents)
 
 ### `tidyNow`
@@ -103,6 +121,111 @@ output: { ok: boolean, error: string | null }
 `reject` is non-destructive and stamps `Status = rejected`. `approve` replaces
 the source page only when the source is explicitly marked safe for this demo with
 `[!sleep]` or demo-safe text in the title/body; otherwise it returns `ok=false`.
+
+### `recallMemory`
+```typescript
+input:  { query?: string | null, limit?: number | null, since?: string | null }
+output: {
+  items: Array<{
+    id: string,
+    title: string,
+    type: "photo" | "note" | "clip",
+    caption: string,
+    capturedAt: string,
+    score: number | null
+  }>
+}
+```
+Returns recent or relevant memory rows for Notion Custom Agents and future
+voice/recall surfaces. If embeddings are unavailable, recall falls back to
+lexical matching and recency.
+
+### `refreshBridge`
+```typescript
+input:  { surface: "cue" | "memory" | "tidy" | "all" }
+output: {
+  ok: boolean,
+  surface: "cue" | "memory" | "tidy" | "all",
+  cueCards: number,
+  memoryRecords: number,
+  tidyProposals: number,
+  notes: string[],
+  errors: string[]
+}
+```
+Agent-callable bridge refresh. `memory` runs the memory ingest path immediately.
+`tidy` refreshes Gardener proposals immediately. `cue` is Worker-sync managed:
+the agent should update `[!cue] Agent Briefing Inbox`, then the 5-minute `cue`
+sync publishes Cue Cards. This is intentional because Cue Cards are Worker-owned
+managed rows whose date fields are read-only to direct tool writes.
+
+### `rephraseDraft`
+```typescript
+input:  { draftId: string, tone: "calmer" | "crisp" | "diplomatic" }
+output: {
+  ok: boolean,
+  draftId: string,
+  tone: "calmer" | "crisp" | "diplomatic",
+  rewrite: string | null,
+  error: string | null
+}
+```
+Generates a real tone variant from the frozen draft's `Original` /
+`Original Snapshot`, stamps `Rewrite`, `Rewrite Variants`, and `Active Tone` on
+the draft row, and does not mutate the source page. `reviewDraft approve` still
+performs the actual source-page replacement.
+
+### `voiceReply`
+```typescript
+input:  {
+  transcript: string,
+  mode: "general" | "briefing" | "memory" | "draft" | null,
+  context: string | null
+}
+output: {
+  ok: boolean,
+  reply: string,
+  mode: "general" | "briefing" | "memory" | "draft",
+  usedMemory: boolean,
+  error: string | null
+}
+```
+Returns a real spoken response for the notch voice surface. For memory-like
+queries it calls `recallMemory` first, then produces a short reply. The app may
+feed this output to local text-to-speech.
+
+## Notion Custom Agent bridge
+
+The Notion agent can use Mail, Calendar, Web, GitHub, Notion, and the Compost
+Worker, but it should write through the same safe bridge surfaces:
+
+| Agent job | Writes to | Worker/app path |
+|---|---|---|
+| Today briefing from Gmail/Calendar/notes | `[!cue] Agent Briefing Inbox` | `cue` sync writes `cueCards`; app shows Up Next |
+| Photo or voice memory curation | `[!memory]` source pages | `memoryIngest` sync writes `notionMemory`; app shows Memory |
+| Cleanup setup | `[!compost]` safe pages or proposal content | `tidyNow`/`applyProposal` stamp `compostPile` |
+| Draft setup | `[!sleep]` safe pages | `sleepOnItReviewer`/`reviewDraft` stamp `frozenDrafts` |
+| Audit trail | `[!audit] Compost Demo State` | Readable by humans; excluded from draft/memory ingestion |
+
+The agent must not mutate untagged personal notes. If Notion marks managed DB
+properties read-only, the agent should write structured content into the row/page
+body and ask the Worker to stamp the canonical properties.
+
+## App display contract for Claude design work
+
+The notch app should remain data-driven:
+
+| UI section/action | Data source | Action endpoint |
+|---|---|---|
+| Up Next / current context | newest `cueCards` row by `Generated At` | `tidyNow` only for Refresh tidy; `cue` sync refreshes cards |
+| Tidy proposals | `compostPile` where `Approved=false` and `Applied=false` | `applyProposal({ proposalId })` |
+| Drafts on ice | `frozenDrafts` where `Status=frozen`, newest `Frozen At` first | `reviewDraft({ draftId, decision })` |
+| Memory | `notionMemory`, newest `Captured At` first | `recallMemory` for search/voice recall |
+| Read aloud / voice | app-native audio + Worker reply text | `voiceReply({ transcript, mode, context })` |
+
+Design can change layout, hierarchy, animation, and visual treatment, but should
+not invent mock-only fields. Missing data should render as empty/error states,
+not fake successful content.
 
 ## Worker webhooks
 
