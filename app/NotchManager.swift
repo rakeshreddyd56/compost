@@ -156,6 +156,10 @@ final class NotchManager: ObservableObject {
     func reviewDraft(draftId: String, approve: Bool) async {
         let action = InflightAction.reviewDraft(draftId)
         let success = SuccessPing.reviewed(draftId)
+        // Clear the stale error eagerly — the user just chose to retry, so
+        // the red banner should vanish the moment the spinner appears, not
+        // wait for the next refresh.
+        draftErrors.removeValue(forKey: draftId)
         inflight.insert(action)
         defer { inflight.remove(action) }
 
@@ -164,7 +168,6 @@ final class NotchManager: ObservableObject {
                 "draftId": draftId,
                 "decision": approve ? "approve" : "reject",
             ])
-            draftErrors.removeValue(forKey: draftId)
             lastActionError = nil
             lastSuccess = success
             Task { @MainActor [weak self] in
@@ -196,13 +199,14 @@ final class NotchManager: ObservableObject {
 
         let action = InflightAction.applyProposal(pid)
         let success = SuccessPing.proposalApplied(proposal.title)
+        // Clear the stale error eagerly so the red banner doesn't linger
+        // while the user is watching the spinner on a retry.
+        proposalErrors.removeValue(forKey: pid)
         inflight.insert(action)
         defer { inflight.remove(action) }
 
         do {
             _ = try await notion.invokeTool("applyProposal", input: ["proposalId": pid])
-            // Real success: clear any prior inline error + flash top-pip.
-            proposalErrors.removeValue(forKey: pid)
             lastActionError = nil
             lastSuccess = success
             Task { @MainActor [weak self] in
@@ -210,8 +214,6 @@ final class NotchManager: ObservableObject {
                 if self?.lastSuccess == success { self?.lastSuccess = nil }
             }
         } catch {
-            // Per-proposal error stays attached to the row until the next
-            // successful retry or until the row vanishes from the poll.
             let msg = (error as? LocalizedError)?.errorDescription
                   ?? String(describing: error)
             proposalErrors[pid] = msg
