@@ -58,12 +58,15 @@ final class NotchManager: ObservableObject {
     private let wake: WakeTrigger
     private let hotkey: HotkeyManager
     private var hasAutoGreetedFirstLoad = false
+    private static let resolvedDraftIdsKey = "compost.resolvedDraftIds"
+    private var resolvedDraftIds: Set<String>
 
     init(notion: NotionClient) {
         self.notion = notion
         self.poller = CompostPoller(client: notion)
         self.wake = WakeTrigger()
         self.hotkey = HotkeyManager()
+        self.resolvedDraftIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedDraftIdsKey) ?? [])
     }
 
     func start() async {
@@ -86,15 +89,27 @@ final class NotchManager: ObservableObject {
     // MARK: - State transitions
 
     private func applySummary(_ s: NotchSummary) async {
-        summary = s
-        if s.lastError == nil { hasLoadedOnce = true }
+        let visibleDrafts = s.drafts.filter { !resolvedDraftIds.contains($0.id) }
+        let visible = NotchSummary(
+            proposalCount: s.proposals.count,
+            proposals: s.proposals,
+            draftCount: visibleDrafts.count,
+            drafts: visibleDrafts,
+            digestReady: s.digestReady,
+            digestUrl: s.digestUrl,
+            currentCue: s.currentCue,
+            lastError: s.lastError
+        )
+
+        summary = visible
+        if visible.lastError == nil { hasLoadedOnce = true }
         // Drop stale per-proposal errors for proposals that are no longer
         // in the summary (applied, archived, or otherwise gone).
-        let liveProposalIds = Set(s.proposals.map { $0.proposalId })
+        let liveProposalIds = Set(visible.proposals.map { $0.proposalId })
         proposalErrors = proposalErrors.filter { liveProposalIds.contains($0.key) }
-        let liveDraftIds = Set(s.drafts.map { $0.id })
+        let liveDraftIds = Set(visible.drafts.map { $0.id })
         draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
-        let total = s.proposalCount + s.draftCount + (s.digestReady ? 1 : 0)
+        let total = visible.proposalCount + visible.draftCount + (visible.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state {
                 await notch?.hide()
@@ -168,6 +183,7 @@ final class NotchManager: ObservableObject {
                 "draftId": draftId,
                 "decision": approve ? "approve" : "reject",
             ])
+            markDraftResolved(draftId)
             lastActionError = nil
             lastSuccess = success
             Task { @MainActor [weak self] in
@@ -182,6 +198,12 @@ final class NotchManager: ObservableObject {
         }
 
         await poller.refreshNow()
+    }
+
+    private func markDraftResolved(_ draftId: String) {
+        guard !draftId.isEmpty else { return }
+        resolvedDraftIds.insert(draftId)
+        UserDefaults.standard.set(Array(resolvedDraftIds), forKey: Self.resolvedDraftIdsKey)
     }
 
     /// Approve and apply a single proposal in one click. Calls the Worker

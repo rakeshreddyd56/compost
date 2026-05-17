@@ -15,6 +15,7 @@ import { pace, sleep, withRetryOn429 } from "./utils/rate-limit";
 import { sha1, proposalId } from "./utils/hashing";
 import { notionTokenReady, emptySync, warnMissingToken } from "./utils/env-guard";
 import { notionClient } from "./utils/notion-auth";
+import { createAuditPage } from "./utils/audit";
 import {
   ageScore, orphanScore, stubScore, taglessScore, brokenLinkScore,
   decay, describeReason, pickAction, DECAY_THRESHOLD, type Signals,
@@ -309,7 +310,18 @@ async function applyProposalRow(notion: any, row: any): Promise<ApplyProposalRes
   const action = readSelect(row, "Action");
   const targetPageId = readText(row, "Target Page ID");
   const fail = async (error: string): Promise<ApplyProposalResult> => {
-    await stampProposal(notion, row.id, { applied: false, error: shortError(error) });
+    await createAuditPage(notion, {
+      title: `[!audit] Compost proposal failed - ${proposalId || "missing proposal"}`,
+      lines: [
+        `Time: ${new Date().toISOString()}`,
+        `Proposal ID: ${proposalId || "(missing)"}`,
+        `Action: ${action || "(missing)"}`,
+        `Target Page ID: ${targetPageId || "(missing)"}`,
+        `Result: failed`,
+        `Error: ${shortError(error)}`,
+      ],
+    });
+    await tryStampProposal(notion, row.id, { applied: false, error: shortError(error) });
     return { ok: false, proposalId, action, targetPageId, applied: false, error: shortError(error) };
   };
 
@@ -323,7 +335,18 @@ async function applyProposalRow(notion: any, row: any): Promise<ApplyProposalRes
   try {
     await assertSafeDemoTarget(notion, targetPageId);
     await executeAction(notion, row);
-    await stampProposal(notion, row.id, { approved: true, applied: true, error: null });
+    await createAuditPage(notion, {
+      title: `[!audit] Compost proposal applied - ${proposalId}`,
+      lines: [
+        `Time: ${new Date().toISOString()}`,
+        `Proposal ID: ${proposalId}`,
+        `Action: ${action}`,
+        `Target Page ID: ${targetPageId}`,
+        `Result: applied`,
+        "Safety: target was explicitly marked as a Compost demo page.",
+      ],
+    });
+    await tryStampProposal(notion, row.id, { approved: true, applied: true, error: null });
     return { ok: true, proposalId, action, targetPageId, applied: true, error: null };
   } catch (e: any) {
     return fail(e);
@@ -382,6 +405,14 @@ async function stampProposal(notion: any, pageId: string, fields: { approved?: b
   }
   if (Object.keys(properties).length === 0) return;
   await notion.pages.update({ page_id: pageId, properties });
+}
+
+async function tryStampProposal(notion: any, pageId: string, fields: { approved?: boolean; applied?: boolean; error?: string | null }) {
+  try {
+    await stampProposal(notion, pageId, fields);
+  } catch (e: any) {
+    console.warn("proposal row stamp skipped:", shortError(e));
+  }
 }
 
 function isNotionObjectNotFound(e: any): boolean {
