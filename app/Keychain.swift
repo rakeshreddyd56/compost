@@ -13,6 +13,7 @@ enum KeychainKey: String {
     case frozenDraftsDbId    = "compost.notion.frozenDraftsDbId"
     case weeklyDigestsDbId   = "compost.notion.weeklyDigestsDbId"
     case cueCardsDbId        = "compost.notion.cueCardsDbId"
+    case notionMemoryDbId    = "compost.notion.notionMemoryDbId"
 }
 
 enum Keychain {

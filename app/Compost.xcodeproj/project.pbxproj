@@ -315,6 +315,7 @@
 				<string>GRP002</string>
 				<string>GRP003</string>
 				<string>GRP004</string>
+				<string>GRP005</string>
 				<string>FR016</string>
 				<string>FR014</string>
 				<string>FR015</string>
@@ -330,6 +331,7 @@
 			<key>children</key>
 			<array>
 				<string>FR008</string>
+				<string>FR020</string>
 			</array>
 			<key>name</key>
 			<string>Models</string>
@@ -365,6 +367,9 @@
 				<string>FR013</string>
 				<string>FR018</string>
 				<string>FR019</string>
+				<string>FR021</string>
+				<string>FR022</string>
+				<string>FR023</string>
 			</array>
 			<key>name</key>
 			<string>Views</string>
@@ -422,6 +427,14 @@
 				<string>BF015</string>
 				<string>BF016</string>
 				<string>BF017</string>
+				<string>BF018</string>
+				<string>BF019</string>
+				<string>BF020</string>
+				<string>BF021</string>
+				<string>BF022</string>
+				<string>BF023</string>
+				<string>BF024</string>
+				<string>BF025</string>
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<integer>0</integer>
@@ -711,6 +724,168 @@
 			<string>PBXBuildFile</string>
 			<key>fileRef</key>
 			<string>FR019</string>
+		</dict>
+		<key>FR020</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>MemoryItem.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF018</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR020</string>
+		</dict>
+		<key>FR021</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PhotosView.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF019</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR021</string>
+		</dict>
+		<key>FR022</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>MemorySection.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF020</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR022</string>
+		</dict>
+		<key>FR023</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>VoiceView.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF021</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR023</string>
+		</dict>
+		<key>FR024</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>VoiceClient.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF022</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR024</string>
+		</dict>
+		<key>FR025</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>AppleVoiceClient.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF023</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR025</string>
+		</dict>
+		<key>FR026</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>AudioRecorder.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF024</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR026</string>
+		</dict>
+		<key>FR027</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>VoiceCaptureHotkey.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>BF025</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FR027</string>
+		</dict>
+		<key>GRP005</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXGroup</string>
+			<key>children</key>
+			<array>
+				<string>FR024</string>
+				<string>FR025</string>
+				<string>FR026</string>
+				<string>FR027</string>
+			</array>
+			<key>name</key>
+			<string>Voice</string>
+			<key>path</key>
+			<string>Voice</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
 		</dict>
 	</dict>
 	<key>rootObject</key>

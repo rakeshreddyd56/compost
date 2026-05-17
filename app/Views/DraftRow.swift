@@ -1,6 +1,16 @@
 //
 //  DraftRow.swift
-//  Compost — Sleep-On-It draft row with tone-diff side-by-side
+//  Compost — 🌙 Sleep-On-It frozen draft row.
+//
+//  v0.5 refactor:
+//   • Calmer rewrite is the hero (always visible). Original sits beside it
+//     in a permanent two-column diff — no "Compare" toggle.
+//   • Tone pills surface the variants the row actually has (parsed from
+//     Rewrite Variants in the row, falling back to a single Calmer). When
+//     a tone has no rewrite yet we render it disabled — no fake invocation
+//     of a worker tool that doesn't exist (rephraseDraft is a proposed
+//     contract in INTERFACE.md, not a live tool).
+//   • Approve / Reject still call the existing reviewDraft worker tool.
 //
 
 import SwiftUI
@@ -8,50 +18,64 @@ import SwiftUI
 struct DraftRow: View {
     let draft: FrozenDraft
     @ObservedObject var manager: NotchManager
+
+    @State private var activeTone: String = ""
     @State private var isHovering = false
-    @State private var showSideBySide = false
 
     private var busy: Bool {
         manager.inflight.contains(.reviewDraft(draft.id))
     }
-
-    private var inlineError: String? {
-        manager.draftErrors[draft.id]
+    private var inlineError: String? { manager.draftErrors[draft.id] }
+    private var rewriteForActive: String {
+        draft.rewrites[activeTone] ?? draft.rewrite
+    }
+    private func isRephrasing(_ tone: String) -> Bool {
+        manager.inflight.contains(.rephraseDraft(draft.id, tone.lowercased()))
+    }
+    private var anyRephraseInflight: Bool {
+        manager.inflight.contains(where: {
+            if case .rephraseDraft(let id, _) = $0 { return id == draft.id }
+            return false
+        })
+    }
+    private var tones: [String] {
+        // Always show the canonical three so the picker is recognisable
+        // even when only Calmer has a real rewrite. Extras (anything outside
+        // the canonical set) get appended.
+        let canonical = ["Calmer", "Crisp", "Diplomatic"]
+        let extras = draft.availableTones.filter { !canonical.contains($0) }
+        return canonical + extras
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             header
-            // Collapsed: lead with the calmer rewrite — that's the offer
-            // the user is being asked to accept. Original lives one tap away.
-            if showSideBySide {
-                sideBySide
-            } else {
-                calmerHero
-            }
+            diffPane
+            tonePicker
             if let err = inlineError { errorBanner(err) }
-            actionButtons
+            actions
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.gray.opacity(isHovering ? 0.08 : 0.05))
-        .cornerRadius(GardenStyle.cornerRadius)
+        .background(GardenStyle.card.opacity(isHovering ? 1.6 : 1.0))
+        .cornerRadius(GardenStyle.cardCornerRadius)
         .overlay(
-            RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
+            RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius)
                 .stroke(inlineError != nil ? Color.red.opacity(0.5) : Color.clear, lineWidth: 1)
         )
+        .onAppear { if activeTone.isEmpty { activeTone = draft.activeTone } }
         .onHover { hovering in
             if GardenStyle.reduceMotion { isHovering = hovering }
             else { withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering } }
         }
-        .animation(GardenStyle.spring, value: showSideBySide)
         .animation(GardenStyle.spring, value: inlineError)
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(draft.title)
                     .font(.system(.callout, design: .rounded).weight(.semibold))
@@ -64,135 +88,188 @@ struct DraftRow: View {
                 }
             }
             Spacer()
-            Button(action: { showSideBySide.toggle() }) {
-                HStack(spacing: 3) {
-                    Text(showSideBySide ? "Hide compare" : "Compare")
-                        .font(.caption2.weight(.medium))
-                    Image(systemName: showSideBySide ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                }
-                .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Show original vs. calmer rewrite side by side")
-            .accessibilityLabel(showSideBySide ? "Hide side-by-side" : "Show side-by-side comparison")
+            Text("🌙 SLEEP-ON-IT")
+                .font(.caption2.weight(.bold))
+                .tracking(1)
+                .foregroundColor(GardenStyle.sage300)
         }
     }
 
-    // MARK: - Collapsed hero: just the calmer rewrite
+    // MARK: - Side-by-side diff
 
-    private var calmerHero: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label("Calmer rewrite", systemImage: "leaf.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundColor(GardenStyle.accentGreen)
-            Text(draft.rewrite.isEmpty ? "—" : draft.rewrite)
-                .font(.callout)
-                .foregroundColor(.primary)
-                .lineLimit(4)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GardenStyle.accentGreen.opacity(0.08))
-        .cornerRadius(GardenStyle.cornerRadius)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Calmer rewrite: \(draft.rewrite)")
-    }
-
-    // MARK: - Expanded side-by-side with tone diff
-
-    private var sideBySide: some View {
-        let diff = ToneDiff(original: draft.original, calmer: draft.rewrite)
+    private var diffPane: some View {
+        let diff = ToneDiff(original: draft.original, calmer: rewriteForActive)
         return HStack(alignment: .top, spacing: 8) {
             sideColumn(
-                title: "Original",
-                tint: .red,
+                title: "ORIGINAL",
+                tint: GardenStyle.accentRose,
                 body: diff.originalText,
-                empty: draft.original.isEmpty
+                empty: draft.original.isEmpty,
+                bg: GardenStyle.card,
+                border: GardenStyle.hair
             )
             sideColumn(
-                title: "Calmer",
-                tint: GardenStyle.accentGreen,
+                title: "\(activeTone.uppercased()) REWRITE",
+                tint: GardenStyle.sage300,
                 body: diff.calmerText,
-                empty: draft.rewrite.isEmpty
+                empty: rewriteForActive.isEmpty,
+                bg: GardenStyle.accentGreen.opacity(0.08),
+                border: GardenStyle.sage400.opacity(0.30)
             )
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Original on left, calmer rewrite on right")
+        .accessibilityLabel("Original on left, \(activeTone) rewrite on right")
     }
 
-    private func sideColumn(title: String, tint: Color, body: Text, empty: Bool) -> some View {
+    private func sideColumn(title: String, tint: Color, body: Text, empty: Bool, bg: Color, border: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(.system(size: 9.5, weight: .bold))
+                .tracking(0.8)
                 .foregroundColor(tint)
             if empty {
-                Text("—").font(.caption).foregroundColor(.secondary)
-            } else {
-                body
+                Text("—")
                     .font(.caption)
-                    .foregroundColor(.primary)
-                    .lineLimit(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                    .foregroundColor(.secondary)
+            } else {
+                ScrollView {
+                    body
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
             }
         }
-        .padding(8)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(tint.opacity(0.06))
+        .background(bg)
+        .overlay(
+            RoundedRectangle(cornerRadius: GardenStyle.cornerRadius)
+                .strokeBorder(border, lineWidth: 0.5)
+        )
         .cornerRadius(GardenStyle.cornerRadius)
     }
 
-    // MARK: - Buttons
+    // MARK: - Tone picker
 
-    private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button(action: {
-                Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
-            }) {
-                HStack(spacing: 4) {
-                    if busy { ProgressView().controlSize(.mini) }
-                    Text("Keep mine")
-                        .font(.caption.weight(.medium))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.15))
-                .cornerRadius(GardenStyle.cornerRadius)
-                .opacity(busy ? 0.7 : 1.0)
+    private var tonePicker: some View {
+        HStack(spacing: 6) {
+            Text("Tone")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            ForEach(tones, id: \.self) { t in
+                tonePill(t)
             }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(busy ? "Reviewing draft" : "Keep my original draft")
-            .help("Reject the rewrite and keep your original")
-
-            Button(action: {
-                Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
-            }) {
-                HStack(spacing: 4) {
-                    if busy { ProgressView().controlSize(.mini).tint(.white) }
-                    Text("Use calmer")
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .foregroundColor(.white)
-                .background(GardenStyle.accentGreen)
-                .cornerRadius(GardenStyle.cornerRadius)
-                .opacity(busy ? 0.85 : 1.0)
-            }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(busy ? "Reviewing draft" : "Use the calmer rewrite")
-            .help("Approve the rewrite — Notion page gets updated")
             Spacer()
         }
     }
 
-    // MARK: - Per-draft error banner
+    private func tonePill(_ tone: String) -> some View {
+        let isActive = tone == activeTone
+        let hasRewrite = draft.rewrites[tone]?.isEmpty == false
+        let busyHere = isRephrasing(tone)
+        let disabled = anyRephraseInflight && !busyHere
+        return Button {
+            if hasRewrite {
+                activeTone = tone
+            } else {
+                Task { await manager.rephraseDraft(draft, displayTone: tone) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if busyHere {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(GardenStyle.sage300)
+                }
+                Text(tone)
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(toneColor(active: isActive, hasRewrite: hasRewrite))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(toneBg(active: isActive, hasRewrite: hasRewrite))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(toneBorder(active: isActive, hasRewrite: hasRewrite), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .opacity(disabled ? 0.5 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(hasRewrite
+              ? "Show the \(tone) rewrite"
+              : "Tap to request the \(tone) rewrite (calls rephraseDraft).")
+        .accessibilityLabel("Tone \(tone), \(isActive ? "selected" : (hasRewrite ? "available" : "request rewrite"))")
+    }
+
+    private func toneColor(active: Bool, hasRewrite: Bool) -> Color {
+        if active      { return GardenStyle.sage300 }
+        if hasRewrite  { return GardenStyle.ink2 }
+        return GardenStyle.ink3
+    }
+    private func toneBg(active: Bool, hasRewrite: Bool) -> Color {
+        if active      { return GardenStyle.sage400.opacity(0.20) }
+        return GardenStyle.card
+    }
+    private func toneBorder(active: Bool, hasRewrite: Bool) -> Color {
+        if active      { return GardenStyle.sage400.opacity(0.40) }
+        return GardenStyle.hair
+    }
+
+    // MARK: - Actions
+
+    private var actions: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            ghostButton("Keep mine", busy: busy) {
+                Task { await manager.reviewDraft(draftId: draft.id, approve: false) }
+            }
+            primaryButton("✓ Use \(activeTone.lowercased())", busy: busy) {
+                Task { await manager.reviewDraft(draftId: draft.id, approve: true) }
+            }
+        }
+    }
+
+    private func ghostButton(_ label: String, busy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if busy { ProgressView().controlSize(.mini) }
+                Text(label).font(.caption.weight(.medium))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.15))
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.7 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .accessibilityLabel(busy ? "Reviewing" : label)
+    }
+
+    private func primaryButton(_ label: String, busy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if busy { ProgressView().controlSize(.mini).tint(.white) }
+                Text(label).font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .foregroundColor(.white)
+            .background(GardenStyle.accentGreen)
+            .cornerRadius(GardenStyle.cornerRadius)
+            .opacity(busy ? 0.85 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .accessibilityLabel(busy ? "Approving rewrite" : label)
+    }
+
+    // MARK: - Error banner
 
     private func errorBanner(_ err: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
@@ -226,21 +303,7 @@ struct DraftRow: View {
     }
 }
 
-// MARK: - Tone diff
-//
-// Lightweight word-level "what changed" highlighter. No diff library: just
-// case-insensitive set difference on word tokens.
-//
-//   • On the Original side, any word present in original but not in calmer
-//     is rendered red. Words that are ALSO ALL-CAPS shouts (length ≥ 4) get
-//     strikethrough — that's the signature "I am REALLY UPSET" move that the
-//     Sleep-On-It pass exists to soften.
-//   • On the Calmer side, any word present in calmer but not in original is
-//     rendered in sage + semibold. That's the gentler phrasing the rewrite
-//     introduced.
-//
-// Short connective words (length < 3) and common stopwords are skipped so the
-// highlight doesn't fire on "and / the / is / to" every line.
+// MARK: - Tone diff (unchanged from v0.3 — still the cleanest single-pass diff)
 
 struct ToneDiff {
     let originalText: Text
@@ -249,7 +312,6 @@ struct ToneDiff {
     init(original: String, calmer: String) {
         let originalTokens = Self.tokens(in: original)
         let calmerTokens = Self.tokens(in: calmer)
-
         self.originalText = Self.render(
             source: original,
             otherWordsLowercased: calmerTokens.lowercasedSet,
@@ -263,7 +325,6 @@ struct ToneDiff {
     }
 
     private enum Kind { case removed, added }
-
     private struct TokenSet {
         let words: [String]
         let lowercasedSet: Set<String>
@@ -291,8 +352,6 @@ struct ToneDiff {
         otherWordsLowercased: Set<String>,
         kind: Kind
     ) -> Text {
-        // Walk the source character-by-character so punctuation, spaces, and
-        // newlines render exactly as authored — we only style the word runs.
         var result = Text("")
         var current = ""
         var inWord = false
@@ -326,12 +385,8 @@ struct ToneDiff {
     ) -> Text {
         let lc = word.lowercased()
         let inOther = otherWordsLowercased.contains(lc)
-        if inOther { return Text(word) }  // unchanged either way
+        if inOther { return Text(word) }
 
-        // ALL-CAPS shout detection runs BEFORE stopword filtering on the
-        // removed side. "WILL" / "WHOLE" / "FAIL" are stopword-ish in lower
-        // case but the whole point of Sleep-On-It is to soften shouting,
-        // so we want them highlighted even if normally we'd skip them.
         let isShout = kind == .removed
             && word.count >= 4
             && word == word.uppercased()
@@ -339,7 +394,7 @@ struct ToneDiff {
 
         if isShout {
             return Text(word)
-                .foregroundColor(.red)
+                .foregroundColor(GardenStyle.accentRose)
                 .fontWeight(.semibold)
                 .strikethrough()
         }
@@ -350,24 +405,11 @@ struct ToneDiff {
 
         switch kind {
         case .removed:
-            return Text(word).foregroundColor(.red.opacity(0.85))
+            return Text(word).foregroundColor(GardenStyle.accentRose.opacity(0.85))
         case .added:
             return Text(word)
-                .foregroundColor(GardenStyle.accentGreen)
+                .foregroundColor(GardenStyle.sage300)
                 .fontWeight(.semibold)
         }
     }
-}
-
-#Preview {
-    let mockPage = NotionPage(
-        id: "123",
-        properties: [:],
-        last_edited_time: nil,
-        archived: false
-    )
-    return DraftRow(
-        draft: FrozenDraft(mockPage)!,
-        manager: NotchManager.preview
-    )
 }

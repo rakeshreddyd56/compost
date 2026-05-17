@@ -74,6 +74,16 @@ Inbox`; the Worker writes rows here. Notion Custom Agents may add captions or
 metadata to source pages, but should avoid manually duplicating `notionMemory`
 rows unless the Worker is unavailable.
 
+The app reads this DB directly via `fetchRecentMemory` (newest by `Captured At`).
+The app may write `Tags` directly via the Notion REST API as a metadata-only
+PATCH. Photo ingest, captions, cleanup, and recall are worker-side.
+
+### `frozenDrafts` — tone variant fields
+| Property | Type | Notes |
+|---|---|---|
+| `Rewrite Variants` | rich_text (JSON) | `{ "calmer": "...", "crisp": "...", "diplomatic": "..." }` — written by `rephraseDraft`; app falls back to single `Rewrite` when absent |
+| `Active Tone` | select | `calmer` \| `crisp` \| `diplomatic`; default visual fallback is `calmer` |
+
 ## Worker tools (callable by app or Notion Custom Agents)
 
 ### `tidyNow`
@@ -196,8 +206,10 @@ feed this output to local text-to-speech.
 
 ## Notion Custom Agent bridge
 
-The Notion agent can use Mail, Calendar, Web, GitHub, Notion, and the Compost
-Worker, but it should write through the same safe bridge surfaces:
+The Notion agent can use Mail, Calendar, Web, GitHub, and Notion. If the Compost
+Worker connection is visible to the agent, it may call Worker tools directly;
+otherwise the app/CLI/scheduled sync triggers the Worker and the agent writes
+through the same safe bridge surfaces:
 
 | Agent job | Writes to | Worker/app path |
 |---|---|---|
@@ -217,7 +229,7 @@ The notch app should remain data-driven:
 
 | UI section/action | Data source | Action endpoint |
 |---|---|---|
-| Up Next / current context | newest `cueCards` row by `Generated At` | `tidyNow` only for Refresh tidy; `cue` sync refreshes cards |
+| Up Next / current context | newest `cueCards` row by `Generated At` | Refresh calls `tidyNow({})` + `refreshBridge({ surface: "all" })`; `cue` sync refreshes cards |
 | Tidy proposals | `compostPile` where `Approved=false` and `Applied=false` | `applyProposal({ proposalId })` |
 | Drafts on ice | `frozenDrafts` where `Status=frozen`, newest `Frozen At` first | `reviewDraft({ draftId, decision })` |
 | Memory | `notionMemory`, newest `Captured At` first | `recallMemory` for search/voice recall |
