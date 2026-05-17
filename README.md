@@ -11,7 +11,7 @@ Compost is not another chatbot over your notes. It is a small autonomous system 
 - the doc you need next is usually buried two tabs away
 - a workspace changes quietly until no one remembers what shifted
 
-So Compost gives Notion four time-aware instincts: a gardener, a night editor, a cue card, and a weekly memory.
+So Compost gives Notion time-aware instincts: a gardener, a night editor, a cue card, a memory pile, and a weekly digest.
 
 ## The Demo
 
@@ -23,11 +23,13 @@ It does not show a feed. It does not ask you to chat. It quietly says what matte
 
 Click the notch and Compost expands into a calm review surface:
 
-- **Cue** shows the current and next moment from a Notion page with time markers.
+- **Cue** shows the current and next moment from Notion, Calendar, and Gmail context.
+- **Memory** shows recent photo and note memories captured in Notion.
 - **Gardener** shows proposed cleanup actions, each with a reason and an approval checkbox.
 - **Sleep-On-It** shows late-night drafts side by side with a calmer rewrite.
+- **Voice** lets you ask for the briefing, memories, drafts, or photos without opening Notion.
 
-The Workers do the work. The notch is just the ambient surface.
+Agents gather context. Workers structure and guard it. Notion stores the truth. The notch is just the ambient action surface.
 
 ## Why This Fits The Hackathon
 
@@ -44,6 +46,18 @@ Compost is built around the platform primitives, not around a prompt box.
 
 ## What It Does
 
+### Agents and Bridges
+
+Compost uses Notion Custom Agents as the context layer.
+
+The agent can read approved sources such as Gmail, Calendar, and selected Notion pages, then write compact bridge pages:
+
+- `[!cue] Agent Briefing Inbox` for current/next context
+- `[!memory] Compost Memory Inbox` for captured notes and photos
+- `[!audit] Compost Demo State` for traceability
+
+Workers do not need direct Gmail or Calendar API access. They read the bridge pages, turn them into structured Notion database rows, and keep the app honest.
+
 ### Gardener
 
 The Gardener is the past tense of Compost.
@@ -59,6 +73,7 @@ Signals include:
 - broken internal links
 
 Gardener can propose actions such as `archive`, `delete_stub`, `fix_link`, `add_tag`, and `merge`.
+In the live demo, safe apply is implemented for `archive`, `delete_stub`, and `add_tag`; `fix_link` and `merge` are proposal-level extensions that intentionally do not mutate content yet.
 
 Important: it never silently destroys user content. The apply pass only acts on rows where:
 
@@ -93,22 +108,185 @@ Next: Gardener proof in 44 min
 
 This is the hackathon-day moment: Compost can read the schedule everyone keeps checking and surface the next useful thing in the notch.
 
+### Memory
+
+Memory is the personal context layer.
+
+Drop a photo or note into a `[!memory]` Notion page. The Memory worker captions images, infers lightweight tags, writes structured rows into **Notion Memory**, and exposes recall through the `recallMemory` tool.
+
+That lets the notch answer things like:
+
+```text
+What do I remember from yesterday's photos?
+```
+
+The answer is grounded in real Notion memory rows, not generated sample data.
+
 ### The Weekly
 
-The Weekly is the zoom-out layer and remains stretch for the hackathon build.
+The Weekly is the zoom-out layer.
 
-The intended version snapshots the workspace, detects meaningful changes across the last seven days, and writes a Sunday digest into Notion.
+It snapshots the workspace, detects meaningful changes across the last seven days, and writes a Sunday digest into Notion.
 
 ## Architecture
 
+Compost is four cooperating layers:
+
+1. **Agents** gather context from Gmail, Calendar, and Notion.
+2. **Bridge pages** keep that context visible and editable inside Notion.
+3. **Workers** transform bridge pages and workspace signals into managed database rows.
+4. **The notch app** renders a tiny action surface and calls Worker tools only when the user approves.
+
 ```mermaid
-flowchart LR
-  Notion["Notion workspace<br/>pages, databases, webhooks"] --> Workers["Notion Workers<br/>TypeScript runtime"]
-  Workers --> DBs["Managed Notion DBs<br/>Compost Pile<br/>Frozen Drafts<br/>Cue Cards"]
-  DBs --> App["Compost.app<br/>SwiftUI + AppKit<br/>DynamicNotchKit"]
-  App --> Tools["Worker tools<br/>tidyNow<br/>applyProposal<br/>reviewDraft<br/>ping"]
-  Tools --> Workers
+flowchart TD
+  subgraph External["External context"]
+    Gmail["Gmail metadata"]
+    Calendar["Calendar events + Meet links"]
+    Photos["Photos and notes"]
+  end
+
+  subgraph Agents["Notion Custom Agents"]
+    Steward["Compost Workspace Steward"]
+    Briefing["Briefing Agent"]
+  end
+
+  subgraph Bridges["Safe Notion bridge pages"]
+    CueInbox["[!cue] Agent Briefing Inbox"]
+    MemoryInbox["[!memory] Compost Memory Inbox"]
+    SleepSource["[!sleep] draft pages"]
+    CompostSource["[!compost] cleanup pages"]
+    Audit["[!audit] audit trail"]
+  end
+
+  subgraph Workers["Notion Workers"]
+    CueWorker["Cue sync"]
+    MemoryWorker["memoryIngest sync"]
+    SleepWorker["Sleep-On-It webhook + tools"]
+    GardenerWorker["Gardener sync + tools"]
+    WeeklyWorker["Weekly digest sync"]
+  end
+
+  subgraph State["Managed Notion databases"]
+    CueCards["Cue Cards"]
+    NotionMemory["Notion Memory"]
+    FrozenDrafts["Frozen Drafts"]
+    CompostPile["Compost Pile"]
+    WeeklyDigest["Weekly Digest"]
+  end
+
+  App["Compost.app in the MacBook notch"]
+  Human["Human approval"]
+
+  Gmail --> Steward
+  Calendar --> Steward
+  Photos --> Steward
+  Steward --> CueInbox
+  Steward --> MemoryInbox
+  Briefing --> CueInbox
+
+  CueInbox --> CueWorker --> CueCards --> App
+  MemoryInbox --> MemoryWorker --> NotionMemory --> App
+  SleepSource --> SleepWorker --> FrozenDrafts --> App
+  CompostSource --> GardenerWorker --> CompostPile --> App
+  CueWorker --> Audit
+  MemoryWorker --> Audit
+  SleepWorker --> Audit
+  GardenerWorker --> Audit
+  WeeklyWorker --> WeeklyDigest
+
+  App --> Human
+  Human -->|approve/apply| GardenerWorker
+  Human -->|review/rephrase| SleepWorker
+  Human -->|ask/recall| MemoryWorker
 ```
+
+### Demo Flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Agent as Notion Agent
+  participant Bridge as "[!cue] / [!memory] pages"
+  participant Worker as Notion Worker
+  participant DB as Managed Notion DB
+  participant App as Compost notch app
+
+  Agent->>Bridge: Write briefing, memory, and audit context
+  Worker->>Bridge: Read tagged bridge pages
+  Worker->>DB: Upsert Cue Cards, Memory, Drafts, Proposals
+  App->>DB: Poll latest visible rows
+  App-->>App: Render Cue, Photos, Drafts, Tidy, Voice
+```
+
+### Safe Mutation Flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant App as Compost notch app
+  participant Tool as Worker tool
+  participant Notion as Notion page/database
+  participant Audit as "[!audit] trail"
+
+  App->>Tool: applyProposal(proposalId) or reviewDraft(draftId)
+  Tool->>Notion: Fetch target row and target page
+  Tool->>Tool: Verify [!compost] or [!sleep] safety marker
+  alt Safe target
+    Tool->>Notion: Archive safe page or replace safe draft
+    Tool->>Notion: Stamp row Applied/Approved/Reviewed
+    Tool->>Audit: Write success audit page
+    Tool-->>App: ok=true
+  else Unsafe target
+    Tool->>Audit: Write refused/failed audit page
+    Tool-->>App: ok=false with exact error
+  end
+```
+
+## Worker Algorithms
+
+### Gardener Decay Model
+
+Gardener gives every candidate page five normalized scores from `0` to `1`, then computes:
+
+```text
+decay =
+  0.35 * age +
+  0.25 * orphan +
+  0.20 * stub +
+  0.10 * tagless +
+  0.10 * broken_link
+```
+
+Pages surface when `decay >= 0.60`.
+
+| Signal | Weight | Scoring rule | Why it matters |
+|---|---:|---|---|
+| Age | 0.35 | `days since last edit / 180`, capped at `1.0` | Old untouched content is most likely to rot. |
+| Orphan | 0.25 | `0 inbound links = 1.0`; otherwise `1 - inbound / 3` | Pages nobody links to are harder to rediscover. |
+| Stub | 0.20 | `1.0` when under 50 words, no child blocks, and older than 30 days | Tiny abandoned notes are likely safe cleanup candidates. |
+| Tagless | 0.10 | Missing operational fields after 7 days scores `1.0`; earlier scores `0.5` | Database rows without structure become ambiguous. |
+| Broken internal links | 0.10 | Missing Notion page mentions divided by total internal mentions | Dead internal references make pages less trustworthy. |
+
+The live dead-link signal validates **internal Notion page mentions** against the pages found in the workspace crawl. External HTTP link checking is a natural next extension, but is not the demo mutation path.
+
+### Gardener Action Criteria
+
+| Criteria | Proposed action | Live apply behavior |
+|---|---|---|
+| `stub >= 0.7` | `delete_stub` | Archives the safe `[!compost]` target after approval. |
+| `broken >= 0.5` | `fix_link` | Proposal exists; mutation is intentionally refused in the live demo. |
+| `tagless >= 0.5` | `add_tag` | Sets `Status = Inbox` where the target schema supports it. |
+| Otherwise `decay >= 0.60` | `archive` | Archives the safe `[!compost]` target after approval. |
+
+### Worker Criteria
+
+| Worker | Input | Criteria / algorithm | Output |
+|---|---|---|---|
+| Cue | `[!cue]` pages or pages with `Cue = true` | Parse time markers, sort the day timeline, pick current plus next, generate a calm 1-2 line cue. | **Cue Cards** |
+| Memory | `[!memory]` source pages | Extract image/file blocks, caption photos, infer tags, create or reuse embeddings, archive duplicate stale rows. | **Notion Memory** |
+| Sleep-On-It | late-night edits or `[!sleep]` demo pages | Freeze source text, generate calmer/crisp/diplomatic rewrites, require `[!sleep]` before replacing source content. | **Frozen Drafts** |
+| Gardener | workspace pages | Score rot with the decay model, propose cleanup, require `[!compost]` before mutation. | **Compost Pile** |
+| Weekly | workspace snapshots | Hash page markdown, compare to prior snapshot, summarize substantive edits above the word-delta threshold. | **Weekly Digest** |
 
 ## Worker Capabilities
 
@@ -119,10 +297,16 @@ flowchart LR
 | `gardener` | sync | Scores workspace rot and writes cleanup proposals. |
 | `tidyNow` | tool | Refreshes Gardener proposals without mutating target pages. |
 | `applyProposal` | tool | Approves and applies one safe demo Gardener proposal. |
+| `refreshBridge` | tool | Refreshes cue, memory, and tidy bridge surfaces. |
 | `onLateNightEdit` | webhook | Receives Notion page update events for Sleep-On-It. |
 | `sleepOnItReviewer` | sync | Moves frozen drafts into morning review. |
 | `sleepOnItCleanup` | sync | Expires stale draft reviews. |
 | `reviewDraft` | tool | Approves or rejects a frozen draft. |
+| `rephraseDraft` | tool | Generates calmer, crisp, or diplomatic tone variants. |
+| `memoryIngest` | sync | Turns `[!memory]` pages into structured memory rows. |
+| `recallMemory` | tool | Searches recent or semantically relevant memories. |
+| `voiceReply` | tool | Answers notch voice commands using visible context and memory. |
+| `weekly` | sync | Builds the weekly workspace digest. |
 
 ## Safety Model
 
@@ -141,11 +325,11 @@ Compost is intentionally conservative.
 - **Notion Workers** with `@notionhq/workers`
 - **Notion managed databases** for state
 - **Notion webhooks** for late-night page updates
-- **Notion Worker tools** for `tidyNow`, `applyProposal`, and `reviewDraft`
+- **Notion Worker tools** for `tidyNow`, `applyProposal`, `reviewDraft`, `rephraseDraft`, `recallMemory`, `voiceReply`, and `refreshBridge`
 - **SwiftUI + AppKit** for the macOS client
 - **DynamicNotchKit** for the notch/floating surface
-- **Claude** for calm rewrite and cue phrasing
-- **OpenAI embeddings** planned for duplicate detection
+- **Claude** for cue phrasing, memory captions, voice replies, and draft rewrites
+- **OpenAI embeddings** for memory recall and future duplicate detection
 
 ## Run The Workers
 
