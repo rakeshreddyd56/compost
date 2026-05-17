@@ -8,6 +8,7 @@ import {
   applyProposal,
   refreshProposals,
 } from "./gardener";
+import { ingestMemoryNow } from "./memory";
 import { notionClient } from "./utils/notion-auth";
 
 export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts: any }) {
@@ -27,6 +28,15 @@ export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts
     targetPageId: j.string().nullable(),
     applied: j.boolean(),
     error: j.string().nullable(),
+  });
+  const bridgeSchema = j.object({
+    ok: j.boolean(),
+    surface: j.enum("cue", "memory", "tidy", "all"),
+    cueCards: j.number(),
+    memoryRecords: j.number(),
+    tidyProposals: j.number(),
+    notes: j.array(j.string()),
+    errors: j.array(j.string()),
   });
 
   const runApplyApproved = async (context: any) => {
@@ -68,5 +78,52 @@ export function registerTools(worker: any, dbs: { compostPile: any; frozenDrafts
     },
   });
 
+  worker.tool("refreshBridge", {
+    title: "Refresh Compost bridge",
+    description: "Agent-callable refresh for cue, memory, tidy, or all bridge surfaces.",
+    schema: j.object({
+      surface: j.enum("cue", "memory", "tidy", "all"),
+    }),
+    outputSchema: bridgeSchema,
+    execute: async ({ surface }: any, context: any) => {
+      const notion = notionClient(context);
+      const errors: string[] = [];
+      const notes: string[] = [];
+      let cueCards = 0;
+      let memoryRecords = 0;
+      let tidyProposals = 0;
+
+      if (surface === "cue" || surface === "all") {
+        notes.push("Cue Cards are Worker-sync managed; update [!cue] Agent Briefing Inbox and the 5-minute cue sync publishes them.");
+      }
+
+      if (surface === "memory" || surface === "all") {
+        try {
+          const r = await ingestMemoryNow(notion);
+          memoryRecords = r.records;
+          if (r.errors) errors.push(`memory:${r.errors}`);
+        } catch (e: any) {
+          errors.push(`memory:${shortError(e)}`);
+        }
+      }
+
+      if (surface === "tidy" || surface === "all") {
+        try {
+          const r = await refreshProposals(notion);
+          tidyProposals = r.upserted || r.proposed;
+          if (r.errors) errors.push(`tidy:${r.errors}`);
+        } catch (e: any) {
+          errors.push(`tidy:${shortError(e)}`);
+        }
+      }
+
+      return { ok: errors.length === 0, surface, cueCards, memoryRecords, tidyProposals, notes, errors };
+    },
+  });
+
   // reviewDraft is registered inside sleep-on-it.ts because it needs the same scope.
+}
+
+function shortError(e: any): string {
+  return String(e?.message ?? e).slice(0, 500);
 }

@@ -24,7 +24,24 @@ interface Moment {
   rawTimeText: string;
 }
 
+interface CueCardRecord {
+  id: string;
+  title: string;
+  sourcePageId: string;
+  sourceTitle: string;
+  currentTime: string;
+  currentHeading: string;
+  currentBullets: string;
+  nextTime: string;
+  nextHeading: string;
+  nextBullets: string;
+  minutesUntilNext: number;
+  calmCue: string;
+  generatedAt: string;
+}
+
 const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\b/i;
+const KNOWN_CUE_DATA_SOURCE_ID = "4fa23cf0-cecf-45f6-a5f0-8c9e0fe5940a";
 
 export function registerCue(worker: any, dbs: { cueCards: any; pacer: any }) {
 
@@ -35,23 +52,48 @@ export function registerCue(worker: any, dbs: { cueCards: any; pacer: any }) {
     execute: async (state: any, context: any) => {
       if (!notionTokenReady()) { warnMissingToken("cue"); return emptySync(); }
       const notion = notionClient(context);
-      const sources = await findCueSources(notion);
-      const changes: any[] = [];
-      for (const page of sources) {
-        try {
-          const timeline = await parseTimeline(notion, page);
-          const { current, next } = pickCurrentAndNext(timeline);
-          if (!current && !next) continue;
-          const calmCue = await calmRephrase(current, next, page);
-          changes.push(buildCardChange(page, current, next, calmCue));
-        } catch (e) {
-          console.error("cue source failed", page.id, e);
-        }
-        await pace();
-      }
+      const cards = await buildCueCards(notion);
+      const changes = cards.map(buildCardChange);
       return { changes, hasMore: false };
     },
   });
+}
+
+export async function refreshCueNow(notion: any): Promise<{ cards: number; upserted: number; errors: string[] }> {
+  const dataSourceId = cueDataSourceId();
+  if (!dataSourceId) return { cards: 0, upserted: 0, errors: ["Cue Cards data source id missing"] };
+
+  const cards = await buildCueCards(notion);
+  let upserted = 0;
+  const errors: string[] = [];
+  for (const card of cards) {
+    try {
+      await upsertCueCardRow(notion, dataSourceId, card);
+      upserted += 1;
+    } catch (e: any) {
+      errors.push(`${card.title}: ${shortError(e)}`);
+    }
+    await pace();
+  }
+  return { cards: cards.length, upserted, errors };
+}
+
+async function buildCueCards(notion: any): Promise<CueCardRecord[]> {
+  const sources = await findCueSources(notion);
+  const cards: CueCardRecord[] = [];
+  for (const page of sources) {
+    try {
+      const timeline = await parseTimeline(notion, page);
+      const { current, next } = pickCurrentAndNext(timeline);
+      if (!current && !next) continue;
+      const calmCue = await calmRephrase(current, next, page);
+      cards.push(buildCueCardRecord(page, current, next, calmCue));
+    } catch (e) {
+      console.error("cue source failed", page.id, e);
+    }
+    await pace();
+  }
+  return cards;
 }
 
 // ---------------- Phase 1: find sources ----------------
@@ -229,7 +271,7 @@ function fallbackCue(current: Moment | null, next: Moment | null): string {
 
 // ---------------- Phase 5: upsert card ----------------
 
-function buildCardChange(page: any, current: Moment | null, next: Moment | null, calmCue: string) {
+function buildCueCardRecord(page: any, current: Moment | null, next: Moment | null, calmCue: string): CueCardRecord {
   const anchor = current?.startISO ?? next?.startISO ?? new Date().toISOString();
   const id = sha1(`${page.id}|${anchor}`);
   const tz = process.env.USER_TIMEZONE || "America/Los_Angeles";
@@ -237,24 +279,85 @@ function buildCardChange(page: any, current: Moment | null, next: Moment | null,
   const untilNext = next ? Math.max(0, next.startMinutes - nowMin) : -1;
 
   return {
+    id,
+    title: pageTitle(page),
+    sourcePageId: page.id,
+    sourceTitle: pageTitle(page),
+    currentTime: current?.startISO ?? "",
+    currentHeading: current?.heading ?? "",
+    currentBullets: (current?.bullets ?? []).join("\n"),
+    nextTime: next?.startISO ?? "",
+    nextHeading: next?.heading ?? "",
+    nextBullets: (next?.bullets ?? []).join("\n"),
+    minutesUntilNext: untilNext,
+    calmCue,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function buildCardChange(card: CueCardRecord) {
+  return {
     type: "upsert" as const,
-    key: id,
+    key: card.id,
     properties: {
-      Title:                Builder.title(pageTitle(page)),
-      "Card ID":            Builder.richText(id),
-      "Source Page ID":     Builder.richText(page.id),
-      "Source Title":       Builder.richText(pageTitle(page)),
-      "Current Time":       current ? Builder.dateTime(current.startISO) : Builder.richText(""),
-      "Current Heading":    Builder.richText(current?.heading ?? ""),
-      "Current Bullets":    Builder.richText((current?.bullets ?? []).join("\n")),
-      "Next Time":          next ? Builder.dateTime(next.startISO) : Builder.richText(""),
-      "Next Heading":       Builder.richText(next?.heading ?? ""),
-      "Next Bullets":       Builder.richText((next?.bullets ?? []).join("\n")),
-      "Minutes Until Next": Builder.number(untilNext),
-      "Calm Cue":           Builder.richText(calmCue),
-      "Generated At":       Builder.dateTime(new Date().toISOString()),
+      Title:                Builder.title(card.title),
+      "Card ID":            Builder.richText(card.id),
+      "Source Page ID":     Builder.richText(card.sourcePageId),
+      "Source Title":       Builder.richText(card.sourceTitle),
+      "Current Time":       card.currentTime ? Builder.dateTime(card.currentTime) : Builder.richText(""),
+      "Current Heading":    Builder.richText(card.currentHeading),
+      "Current Bullets":    Builder.richText(card.currentBullets),
+      "Next Time":          card.nextTime ? Builder.dateTime(card.nextTime) : Builder.richText(""),
+      "Next Heading":       Builder.richText(card.nextHeading),
+      "Next Bullets":       Builder.richText(card.nextBullets),
+      "Minutes Until Next": Builder.number(card.minutesUntilNext),
+      "Calm Cue":           Builder.richText(card.calmCue),
+      "Generated At":       Builder.dateTime(card.generatedAt),
     },
   };
+}
+
+async function upsertCueCardRow(notion: any, dataSourceId: string, card: CueCardRecord) {
+  const existing = await fetchCueCardRow(notion, dataSourceId, card.id);
+  const properties = cueCardProperties(card);
+  if (existing) {
+    await notion.pages.update({ page_id: existing.id, properties });
+    return;
+  }
+  await notion.pages.create({ parent: { data_source_id: dataSourceId }, properties });
+}
+
+async function fetchCueCardRow(notion: any, dataSourceId: string, cardId: string): Promise<any | null> {
+  const res: any = await withRetryOn429(() => notion.dataSources.query({
+    data_source_id: dataSourceId,
+    page_size: 1,
+    filter: { property: "Card ID", rich_text: { equals: cardId } },
+  }));
+  return res.results?.[0] ?? null;
+}
+
+function cueCardProperties(card: CueCardRecord) {
+  return {
+    Title: titleProp(card.title),
+    "Card ID": richTextProp(card.id),
+    "Source Page ID": richTextProp(card.sourcePageId),
+    "Source Title": richTextProp(card.sourceTitle),
+    "Current Time": card.currentTime ? { date: { start: card.currentTime } } : { date: null },
+    "Current Heading": richTextProp(card.currentHeading),
+    "Current Bullets": richTextProp(card.currentBullets),
+    "Next Time": card.nextTime ? { date: { start: card.nextTime } } : { date: null },
+    "Next Heading": richTextProp(card.nextHeading),
+    "Next Bullets": richTextProp(card.nextBullets),
+    "Minutes Until Next": { number: card.minutesUntilNext },
+    "Calm Cue": richTextProp(card.calmCue),
+    "Generated At": { date: { start: card.generatedAt } },
+  };
+}
+
+function cueDataSourceId(): string {
+  return process.env.CUE_CARDS_DATA_SOURCE_ID
+    || process.env.CUE_CARDS_DB_DATA_SOURCE_ID
+    || KNOWN_CUE_DATA_SOURCE_ID;
 }
 
 // ---------------- helpers ----------------
@@ -272,4 +375,20 @@ function extractText(b: any): string {
   const rt = b?.[b?.type]?.rich_text;
   if (Array.isArray(rt)) return rt.map((t: any) => t.plain_text ?? "").join("").trim();
   return "";
+}
+
+function titleProp(text: string) {
+  return {
+    title: [{ type: "text", text: { content: String(text).slice(0, 1800) || "Untitled" } }],
+  };
+}
+
+function richTextProp(text: string) {
+  return {
+    rich_text: [{ type: "text", text: { content: String(text ?? "").slice(0, 1900) } }],
+  };
+}
+
+function shortError(e: any): string {
+  return String(e?.message ?? e).slice(0, 500);
 }

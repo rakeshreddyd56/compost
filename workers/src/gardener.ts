@@ -23,6 +23,7 @@ import {
 
 const WORKSPACE_CAP = 500;
 const DEMO_GARDENER_RE = /\[!(?:compost|gardener|stale)\]/i;
+const COMPOST_CONTROL_PAGE_RE = /\[!(?:audit|cue|memory|sleep)\]/i;
 
 export interface ApplyApprovedResult {
   proposalId: string;
@@ -116,7 +117,7 @@ async function walkWorkspace(notion: any): Promise<any[]> {
     await pace();
   }
   return pages
-    .filter((p) => !p.archived && !isCompostManagedRow(p))
+    .filter((p) => !p.archived && !isCompostManagedRow(p) && !isCompostControlPage(p))
     .slice(0, WORKSPACE_CAP);
 }
 
@@ -528,6 +529,10 @@ function stripBlockIds(b: any): any {
 function isCompostManagedRow(page: any): boolean {
   const props = page.properties ?? {};
   return Boolean(props["Proposal ID"] || props["Draft ID"] || props["Card ID"] || props["Content Hash"]);
+}
+
+function isCompostControlPage(page: any): boolean {
+  return COMPOST_CONTROL_PAGE_RE.test(pageTitle(page));
 }
 
 function isDemoGardenerSeed(page: any, blocks: any[]): boolean {
