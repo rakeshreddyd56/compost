@@ -49,6 +49,7 @@ export function registerMemory(worker: any, dbs: { notionMemory: any; embeddings
       const records = await buildMemoryRecords(notion);
       await archiveLiveNonItemRows(notion);
       await upsertLiveMemoryRows(notion, records);
+      await archiveDuplicateLiveRows(notion);
       return {
         changes: records.map(memoryChange),
         hasMore: false,
@@ -329,7 +330,6 @@ async function findLiveMemoryRow(notion: any, record: MemoryRecord): Promise<any
         and: [
           { property: "Source Page ID", rich_text: { equals: record.sourcePageId } },
           { property: "Type", select: { equals: record.type } },
-          { property: "Content", rich_text: { equals: record.content } },
         ],
       },
     });
@@ -337,6 +337,74 @@ async function findLiveMemoryRow(notion: any, record: MemoryRecord): Promise<any
   } catch {
     return null;
   }
+}
+
+async function archiveDuplicateLiveRows(notion: any) {
+  const dataSourceId = memoryDataSourceId();
+  if (!dataSourceId) return;
+
+  try {
+    const rows: any[] = [];
+    let cursor: string | undefined = undefined;
+    do {
+      const res: any = await notion.dataSources.query({
+        data_source_id: dataSourceId,
+        page_size: 100,
+        start_cursor: cursor,
+      });
+      rows.push(...(res.results ?? []));
+      cursor = res.has_more ? res.next_cursor : undefined;
+      await pace();
+    } while (cursor && rows.length < 500);
+
+    const groups = new Map<string, any[]>();
+    for (const row of rows) {
+      if (row.archived) continue;
+      const title = readTitle(row);
+      const caption = readText(row, "Caption");
+      const sourcePageId = readText(row, "Source Page ID");
+      const type = readSelect(row, "Type") || "note";
+
+      if (/compost memory inbox/i.test(title) || /landing zone for memory/i.test(caption)) {
+        await notion.pages.update({ page_id: row.id, archived: true });
+        await pace();
+        continue;
+      }
+
+      if (!sourcePageId) continue;
+      const key = `${sourcePageId}|${type}`;
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const [keep, ...archive] = group.sort(compareMemoryRowsForKeep);
+      void keep;
+      for (const row of archive) {
+        await notion.pages.update({ page_id: row.id, archived: true });
+        await pace();
+      }
+    }
+  } catch (e: any) {
+    console.warn("live memory duplicate cleanup skipped:", shortError(e));
+  }
+}
+
+function compareMemoryRowsForKeep(a: any, b: any): number {
+  const captionA = readText(a, "Caption");
+  const captionB = readText(b, "Caption");
+  const qualityA = memoryCaptionQuality(captionA);
+  const qualityB = memoryCaptionQuality(captionB);
+  if (qualityA !== qualityB) return qualityB - qualityA;
+  return readDate(b, "Captured At").localeCompare(readDate(a, "Captured At"));
+}
+
+function memoryCaptionQuality(caption: string): number {
+  const clean = cleanOneLine(caption);
+  if (!clean) return 0;
+  if (/^(photo|note):\s*(drag|this page is the landing zone)/i.test(clean)) return 1;
+  if (/^caption\s*\(manual\):/i.test(clean)) return 2;
+  return 3;
 }
 
 function liveMemoryProperties(record: MemoryRecord) {

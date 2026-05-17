@@ -13,6 +13,9 @@ parallel.
   `[!gardener]`, or `[!stale]`.
 - `reviewDraft approve` mutates only explicit safe demo pages marked `[!sleep]`
   or demo-safe in the title/body. `reviewDraft reject` never mutates a source.
+- Gardener skips Compost control pages marked `[!audit]`, `[!cue]`,
+  `[!memory]`, or `[!sleep]` so bridge pages do not appear as cleanup
+  proposals.
 - Legacy `applyApproved` only runs when passed `--legacy-apply-approved`.
 - `sleepOnItCleanup` is previewed during demo smoke checks, but not triggered by
   `--write`.
@@ -158,6 +161,95 @@ The internal integration token must have access to:
 - Compost Pile managed database
 - Frozen Drafts managed database
 - Cue Cards managed database
+- Notion Memory database
+- `[!cue] Agent Briefing Inbox`
+- `[!memory] Compost Memory Inbox`
 
 The app uses the same integration token in Keychain to read the managed
 databases directly.
+
+## Notion Custom Agent contract
+
+The Notion agent is allowed to orchestrate the demo, but it should not become a
+second source of truth for Worker-owned rows.
+
+Use the agent for:
+
+- checking the demo workspace structure
+- reading Gmail and Calendar context
+- updating `[!cue] Agent Briefing Inbox`
+- curating `[!memory]` source pages
+- asking the Worker to run safe tools when the agent UI exposes them
+- writing audit notes to `[!audit] Compost Demo State`
+
+Do not use the agent for:
+
+- deleting, archiving, or rewriting untagged personal notes
+- directly editing Worker-owned row properties when Notion marks them read-only
+- applying Gardener proposals without a `[!compost]`, `[!gardener]`, or
+  `[!stale]` safe marker
+- approving Sleep-On-It rewrites unless the source page is explicitly marked
+  `[!sleep]`
+
+Recommended agent instruction:
+
+```text
+You are Compost Workspace Steward.
+
+You safely maintain the Compost demo workspace and prepare structured inputs for
+the Compost Worker and macOS notch app.
+
+Boundaries:
+- Only edit pages or rows explicitly marked [!compost], [!sleep], [!cue],
+  [!memory], or [!audit].
+- Never mutate unmarked personal notes.
+- Prefer writing source pages/briefing pages and asking the Compost Worker tools
+  to stamp managed database rows.
+- If a database property is read-only, write the structured data in page content
+  and record the limitation in [!audit] Compost Demo State.
+
+Canonical surfaces:
+- Compost Demo Workspace: 36280528-2d0b-8186-9538-ed5624aa2df2
+- Compost Pile: 36280528-2d0b-8163-a2d8-c8fc7b576948
+- Frozen Drafts: 36280528-2d0b-81d8-b0ec-c4f94e08b10f
+- Cue Cards: 36280528-2d0b-81a7-a360-fa05045d796d
+- Notion Memory: c7d4a833-f620-413f-be0e-7bc6d55b7a2c
+- Worker: compost / 019e31dc-050f-7a85-974a-21954fd261f5
+
+Demo actions:
+- For Gmail/Calendar, summarize into [!cue] Agent Briefing Inbox. Do not paste
+  private email bodies verbatim.
+- For photos/notes, create or update [!memory] source pages; the Worker
+  memoryIngest sync writes Notion Memory rows.
+- For cleanup, create safe [!compost] proposal sources and ask the Worker
+  tidyNow/applyProposal tools to refresh/apply.
+- For drafts, create safe [!sleep] source pages and ask the Worker
+  sleepOnItReviewer/reviewDraft tools to freeze/review.
+
+Always append a short audit note after each run:
+what changed, which sources were used, which Worker tools were called, and any
+limitations.
+```
+
+Useful one-off prompts for the agent:
+
+```text
+Run a Compost sync audit. Verify [!cue], [!memory], [!sleep], [!compost], and
+[!audit] surfaces exist. Verify the four canonical databases exist. List any
+duplicate or stale demo pages, but do not delete anything. Write the result to
+[!audit] Compost Demo State.
+```
+
+```text
+Prepare the next notch briefing from Gmail, Calendar, and Compost notes. Update
+[!cue] Agent Briefing Inbox with CURRENT / NEXT / NOTCH_SUMMARY / Generated at.
+Then, if the Compost Worker cue tool is available, ask it to refresh Cue Cards.
+```
+
+```text
+Curate memory. For each [!memory] source page under [!memory] Compost Memory
+Inbox, ensure it has a short manual caption, captured time, and 1-3 tags in the
+page body. Then ask the Compost Worker memoryIngest sync/tool to refresh Notion
+Memory if available. Do not create duplicate Notion Memory rows manually unless
+the Worker is unavailable.
+```
