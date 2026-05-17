@@ -13,17 +13,26 @@ struct NotchSummary {
     let digestReady: Bool
     let digestUrl: URL?
     let currentCue: CueCard?
+    let memoryCount: Int
+    let memory: [MemoryItem]
     let lastError: String?  // non-nil means most recent poll failed
 
     var hasAnything: Bool {
-        proposalCount + draftCount + (digestReady ? 1 : 0) > 0
+        proposalCount + draftCount + memoryCount + (digestReady ? 1 : 0) > 0
+    }
+
+    /// Photo-only slice of memory for the slideshow surface.
+    var memoryPhotos: [MemoryItem] {
+        memory.filter { $0.kind == .photo && $0.assetURL != nil }
     }
 
     static let empty = NotchSummary(
         proposalCount: 0, proposals: [],
         draftCount: 0, drafts: [],
         digestReady: false, digestUrl: nil,
-        currentCue: nil, lastError: nil
+        currentCue: nil,
+        memoryCount: 0, memory: [],
+        lastError: nil
     )
 }
 
@@ -50,16 +59,61 @@ struct FrozenDraft: Identifiable {
     let title: String
     let sourcePageId: String
     let original: String
-    let rewrite: String
+    /// Per-tone rewrites keyed by tone name. The current contract exposes a
+    /// single `Rewrite` field, so the parser inserts that under "Calmer".
+    /// When the v0.5 worker tool `rephraseDraft` lands and writes a
+    /// `Rewrite Variants` JSON blob, this dictionary will grow without any
+    /// schema change on the app side.
+    let rewrites: [String: String]
+    let activeTone: String
     let frozenAt: String
+
+    /// Back-compat: existing callers still read `.rewrite`. Returns the
+    /// active tone's text, or the first available tone, or empty.
+    var rewrite: String {
+        rewrites[activeTone] ?? rewrites["Calmer"] ?? rewrites.values.first ?? ""
+    }
+
+    var availableTones: [String] {
+        // Preserve a stable ordering for the picker. Anything in the dict
+        // that isn't in the known list still renders at the end.
+        let known = ["Calmer", "Crisp", "Diplomatic"]
+        let inDict = Set(rewrites.keys)
+        let primary = known.filter { inDict.contains($0) }
+        let extras = rewrites.keys.filter { !known.contains($0) }.sorted()
+        return primary + extras
+    }
 
     init?(_ page: NotionPage) {
         self.id = page.id
         self.title = page.properties["Title"]?.plainText ?? "Untitled"
         self.sourcePageId = page.properties["Source Page ID"]?.plainText ?? ""
         self.original = page.properties["Original Snapshot"]?.plainText ?? ""
-        self.rewrite = page.properties["Rewrite"]?.plainText ?? ""
         self.frozenAt = page.properties["Frozen At"]?.date?.start ?? ""
+
+        let activeRaw = page.properties["Active Tone"]?.plainText ?? ""
+        let active = activeRaw.isEmpty ? "Calmer" : activeRaw
+        self.activeTone = active
+
+        var dict: [String: String] = [:]
+
+        // Variants blob (future). When present, prefer it as the source of
+        // truth. The contract is a JSON object { "Calmer": "...", ... }.
+        let variantsRaw = page.properties["Rewrite Variants"]?.plainText ?? ""
+        if !variantsRaw.isEmpty,
+           let data = variantsRaw.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            dict = parsed
+        }
+
+        let canonical = page.properties["Rewrite"]?.plainText ?? ""
+        if !canonical.isEmpty, dict[active] == nil {
+            dict[active] = canonical
+        }
+        if dict.isEmpty {
+            dict["Calmer"] = canonical
+        }
+        self.rewrites = dict
     }
 }
 
@@ -104,9 +158,6 @@ struct CueCard: Identifiable {
         self.currentBullets = page.properties["Current Bullets"]?.plainText ?? ""
         self.nextHeading = page.properties["Next Heading"]?.plainText ?? ""
         self.nextBullets = page.properties["Next Bullets"]?.plainText ?? ""
-        // Notion number property — must read .number, not .plainText (which
-        // would always return "" and thus default to 0, making every cue
-        // look imminent).
         if let n = page.properties["Minutes Until Next"]?.number {
             self.minutesUntilNext = Int(n)
         } else {
@@ -115,6 +166,33 @@ struct CueCard: Identifiable {
         self.calmCue = page.properties["Calm Cue"]?.plainText ?? ""
         self.generatedAt = Self.parseDate(page.properties["Generated At"]?.date?.start)
         self.currentTime = Self.parseDate(page.properties["Current Time"]?.date?.start)
+    }
+
+    /// Lazily-parsed checklist items from `Current Bullets`. Each non-empty
+    /// line becomes one item; leading "- " / "• " / "* " markers are stripped.
+    var bulletItems: [String] {
+        currentBullets
+            .split(whereSeparator: \.isNewline)
+            .map { line -> String in
+                var s = String(line).trimmingCharacters(in: .whitespaces)
+                for prefix in ["- [ ]", "- [x]", "- ", "• ", "* "] {
+                    if s.hasPrefix(prefix) {
+                        s = String(s.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                        break
+                    }
+                }
+                return s
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Pretty "10:30 AM" for the time strip; empty when no currentTime.
+    func currentTimeLabel(now: Date = Date()) -> String {
+        guard let currentTime else { return "" }
+        let f = DateFormatter()
+        f.locale = .current
+        f.dateFormat = "h:mm a"
+        return f.string(from: currentTime)
     }
 
     private static func parseDate(_ s: String?) -> Date? {

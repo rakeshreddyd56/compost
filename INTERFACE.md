@@ -56,6 +56,29 @@
 | `Calm Cue` | rich_text | 1-2 line Claude-rephrased card |
 | `Generated At` | date | When this row was last written |
 
+### `notionMemory` — User-curated memory pile (photo / note / clip)
+| Property | Type | Notes |
+|---|---|---|
+| `Title` | title | "[!memory] …" or worker-derived |
+| `Source Page ID` | rich_text | Notion page under the Memory parent where the item lives |
+| `Type` | select | `photo` \| `note` \| `clip` |
+| `Content` | rich_text | For `photo` rows, the http(s) URL of the asset. For `note` / `clip`, the body text. |
+| `Caption` | rich_text | Claude-generated for photos; user-written for notes |
+| `Captured At` | date | When the source block was created (EXIF when available) |
+| `Tags` | multi_select | `compost-sighting`, `walk`, `note`, etc — drives mascot reactions in the slideshow |
+| `Embedding ID` | rich_text | OpenAI `text-embedding-3-small` id (for `recallMemory`) |
+
+The app reads this DB directly via `fetchRecentMemory` (newest by `Captured At`).
+The app also writes to `Tags` directly via the Notion REST API (a metadata-only
+PATCH — no worker tool needed for tagging). All photo ingest + caption + embed
+work is done worker-side by `memoryIngest`.
+
+### `frozenDrafts` — additional v0.5 fields (proposed)
+| Property | Type | Notes |
+|---|---|---|
+| `Rewrite Variants` | rich_text (JSON) | `{ "Calmer": "...", "Crisp": "...", "Diplomatic": "..." }` — written by `rephraseDraft`; app falls back to single `Rewrite` when absent |
+| `Active Tone` | rich_text | Last tone the user (or worker) selected. Default `Calmer`. |
+
 ## Worker tools (callable by app or Notion Custom Agents)
 
 ### `tidyNow`
@@ -103,6 +126,29 @@ output: { ok: boolean, error: string | null }
 `reject` is non-destructive and stamps `Status = rejected`. `approve` replaces
 the source page only when the source is explicitly marked safe for this demo with
 `[!sleep]` or demo-safe text in the title/body; otherwise it returns `ok=false`.
+
+### `memoryIngest` (sync, not a tool — proposed)
+Worker sync that walks pages under the Memory parent on a 15-min delta:
+- Photo blocks → upload caption via Claude vision, write `notionMemory` row
+  with `Type=photo`, `Content=<signed-url>`, `Caption`, `Captured At`, source.
+- Text / quote blocks → text embedding via OpenAI; `Type=note`.
+- Pacer budget: 80 req / 30 s. Backfill on first run, then delta from cursor.
+
+### `recallMemory` (proposed)
+```typescript
+input:  { query: string, limit?: number, since?: string | null }
+output: { items: Array<{ id: string, score: number, kind: string, content: string, caption: string }> }
+```
+Called by the Memory Curator Custom Agent (not by the app). Uses the
+`Embedding ID` field to rank by cosine similarity.
+
+### `rephraseDraft` (proposed — not yet implemented)
+```typescript
+input:  { draftId: string, tone: "Calmer" | "Crisp" | "Diplomatic" }
+output: { ok: boolean, rewrite: string, error: string | null }
+```
+Drives the Drafts tone picker. Until this tool exists, the app's tone
+picker disables non-Calmer pills (no fake invocation).
 
 ## Worker webhooks
 

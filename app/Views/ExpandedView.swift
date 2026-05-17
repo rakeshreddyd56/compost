@@ -1,6 +1,16 @@
 //
 //  ExpandedView.swift
-//  Compost — expanded notch card: ☀️ cue, 🪴 proposals, 🌙 drafts, 📰 weekly
+//  Compost — expanded notch card.
+//
+//  Order in v0.5:
+//   1. ☀ Up next (cue)
+//   2. 🪴 Tidy (proposals)
+//   3. 🌙 Drafts on ice
+//   4. 🧠 Memory (notionMemory rows)   ← new in v0.5
+//   5. 📰 Sunday digest
+//
+//  The Photos slideshow is presented in place of `content` when the user
+//  taps "Open photos slideshow" inside the Memory section.
 //
 
 import SwiftUI
@@ -8,27 +18,16 @@ import SwiftUI
 struct ExpandedView: View {
     @ObservedObject var manager: NotchManager
     @State private var appeared = false
+    @State private var showingPhotos = false
 
     var body: some View {
-        VStack(spacing: GardenStyle.sectionGap) {
-            header
-
-            topPip
-
-            Divider()
-
-            ScrollView {
-                content
-                    .padding(.horizontal, GardenStyle.cardPadding)
-                    .padding(.bottom, GardenStyle.cardPadding)
+        Group {
+            if showingPhotos {
+                PhotosView(manager: manager, isPresented: $showingPhotos)
+            } else {
+                summaryCard
             }
-            .frame(maxHeight: 360)
         }
-        .frame(width: GardenStyle.expandedWidth)
-        .padding(.top, GardenStyle.cardPadding)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius, style: .continuous))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
         .onAppear {
             if GardenStyle.reduceMotion {
                 appeared = true
@@ -38,49 +37,38 @@ struct ExpandedView: View {
         }
     }
 
-    // MARK: - Top pip (success ✓, offline ⚠, or loading …)
+    // MARK: - Standard summary card
+
+    private var summaryCard: some View {
+        VStack(spacing: GardenStyle.sectionGap) {
+            header
+            topPip
+            Divider()
+            ScrollView {
+                content
+                    .padding(.horizontal, GardenStyle.cardPadding)
+                    .padding(.bottom, GardenStyle.cardPadding)
+            }
+            .frame(maxHeight: 380)
+        }
+        .frame(width: GardenStyle.expandedWidth)
+        .padding(.top, GardenStyle.cardPadding)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: GardenStyle.cardCornerRadius))
+        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+    }
+
+    // MARK: - Top pip
 
     @ViewBuilder
     private var topPip: some View {
         if let success = manager.lastSuccess {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundColor(GardenStyle.accentGreen)
-                Text(successMessage(success))
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.primary)
-                Spacer()
-            }
-            .padding(.horizontal, GardenStyle.cardPadding)
-            .transition(.opacity)
-            .accessibilityLabel(successMessage(success))
+            pip(icon: "checkmark.circle.fill", tint: GardenStyle.accentGreen,
+                text: successMessage(success))
         } else if let actionErr = manager.lastActionError {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundColor(.red)
-                Text(actionErr)
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                Spacer()
-            }
-            .padding(.horizontal, GardenStyle.cardPadding)
-            .transition(.opacity)
-            .accessibilityLabel(actionErr)
+            pip(icon: "exclamationmark.triangle.fill", tint: .red, text: actionErr, secondary: false)
         } else if let err = manager.summary.lastError {
-            HStack(spacing: 6) {
-                Image(systemName: "wifi.exclamationmark")
-                    .font(.caption2)
-                    .foregroundColor(.yellow)
-                Text(err)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, GardenStyle.cardPadding)
-            .accessibilityLabel("Sync issue: \(err)")
+            pip(icon: "wifi.exclamationmark", tint: .yellow, text: err, secondary: true)
         } else if !manager.hasLoadedOnce {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
@@ -90,20 +78,39 @@ struct ExpandedView: View {
                 Spacer()
             }
             .padding(.horizontal, GardenStyle.cardPadding)
-            .accessibilityLabel("Loading workspace state")
         }
+    }
+
+    private func pip(icon: String, tint: Color, text: String, secondary: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundColor(tint)
+            Text(text)
+                .font(.caption.weight(.medium))
+                .foregroundColor(secondary ? .secondary : .primary)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, GardenStyle.cardPadding)
+        .transition(.opacity)
+        .accessibilityLabel(text)
     }
 
     private func successMessage(_ ping: SuccessPing) -> String {
         switch ping {
-        case .tidied:                     return "Tidy proposals refreshed"
-        case .applied:                    return "Approved proposals applied"
-        case .proposalApplied(let title): return "Applied: \(title)"
-        case .reviewed:                   return "Draft reviewed"
+        case .tidied:                       return "Tidy proposals refreshed"
+        case .applied:                      return "Approved proposals applied"
+        case .proposalApplied(let title):   return "Applied: \(title)"
+        case .reviewed:                     return "Draft reviewed"
+        case .voiceCaptured(let preview):
+            let t = preview.trimmingCharacters(in: .whitespaces)
+            return t.isEmpty ? "Voice captured" : "Voice: \(t.prefix(60))"
+        case .memoryTagged(let title, let tag): return "#\(tag) → \(title)"
         }
     }
 
-    // MARK: - Body sections
+    // MARK: - Body
 
     @ViewBuilder
     private var content: some View {
@@ -114,7 +121,7 @@ struct ExpandedView: View {
         } else {
             VStack(alignment: .leading, spacing: GardenStyle.sectionGap) {
                 if let cue = manager.summary.currentCue {
-                    sectionLabel("☀️ Up next")
+                    sectionLabel("☀ Up next")
                     CueRow(cue: cue, manager: manager)
                         .staggered(index: 0, appeared: appeared)
                 }
@@ -130,9 +137,6 @@ struct ExpandedView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    // Global "Apply approved" removed in favour of per-row
-                    // "Approve & apply" buttons (see ProposalRow). Each row
-                    // is reviewable independently so users opt in per item.
                 }
 
                 if manager.summary.draftCount > 0 {
@@ -141,6 +145,11 @@ struct ExpandedView: View {
                         DraftRow(draft: draft, manager: manager)
                             .staggered(index: idx + 6, appeared: appeared)
                     }
+                }
+
+                if manager.summary.memoryCount > 0 || hasMemoryDb {
+                    MemorySection(manager: manager, showingPhotos: $showingPhotos)
+                        .staggered(index: 10, appeared: appeared)
                 }
 
                 if manager.summary.digestReady, let url = manager.summary.digestUrl {
@@ -163,13 +172,19 @@ struct ExpandedView: View {
         }
     }
 
+    /// Whether the Memory DB ID is configured. When it's not, the section is
+    /// hidden entirely (no empty card flooding the UI for users who haven't
+    /// opted into the memory flow yet).
+    private var hasMemoryDb: Bool {
+        !(Keychain.get(.notionMemoryDbId) ?? "").isEmpty
+    }
+
     // MARK: - States
 
     private var loadingState: some View {
         VStack(spacing: 12) {
             Mascot(size: 56, mood: .calm)
-            ProgressView()
-                .controlSize(.small)
+            ProgressView().controlSize(.small)
             Text("Compost is checking on your workspace…")
                 .font(.callout)
                 .foregroundColor(.secondary)
@@ -239,7 +254,6 @@ struct ExpandedView: View {
         .disabled(busy)
         .help("Refresh Gardener proposals (does not apply anything)")
         .accessibilityLabel(busy ? "Refreshing tidy proposals" : "Refresh tidy")
-        .accessibilityHint("Refreshes the Gardener proposal list without applying any actions")
     }
 
     // MARK: - Helpers
@@ -294,8 +308,4 @@ private extension View {
     func staggered(index: Int, appeared: Bool) -> some View {
         modifier(StaggeredAppear(index: index, appeared: appeared))
     }
-}
-
-#Preview {
-    ExpandedView(manager: NotchManager.preview)
 }

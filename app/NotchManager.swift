@@ -24,6 +24,8 @@ enum InflightAction: Hashable {
     case applyApproved
     case applyProposal(String)   // per-proposal apply, keyed by proposalId
     case reviewDraft(String)
+    case voiceCapture
+    case tagMemory(String)       // memory item id
 }
 
 /// One-shot success ping consumed by the view layer to flash a brief "✓ done"
@@ -33,6 +35,16 @@ enum SuccessPing: Equatable {
     case applied
     case proposalApplied(String) // payload = proposal title for the pip text
     case reviewed(String)
+    case voiceCaptured(String)   // transcript preview
+    case memoryTagged(String, String)  // (memory title, tag)
+}
+
+/// What's filling the expanded card right now. The voice surface replaces
+/// the standard expanded view instead of being a section, so the manager
+/// owns this enum directly.
+enum NotchSurface: Equatable {
+    case summary
+    case voice
 }
 
 @MainActor
@@ -51,21 +63,35 @@ final class NotchManager: ObservableObject {
     /// Same pattern for Sleep-On-It draft review failures, keyed by draft.id
     /// (the Notion page id of the frozenDrafts row).
     @Published private(set) var draftErrors: [String: String] = [:]
+    @Published private(set) var memoryErrors: [String: String] = [:]
+
+    // Voice surface state. The voice flow is fire-and-forget per
+    // press/release; the view observes these to render.
+    @Published private(set) var surface: NotchSurface = .summary
+    @Published private(set) var voiceStage: VoiceStage = .idle
+    @Published private(set) var voiceTranscript: String = ""
+    @Published private(set) var voiceAmplitude: Float = 0
 
     let notion: NotionClient
     private var notch: DynamicNotch<AnyView>?
     private let poller: CompostPoller
     private let wake: WakeTrigger
     private let hotkey: HotkeyManager
+    private let voiceHotkey: VoiceCaptureHotkey
+    private let voice: VoiceClient
     private var hasAutoGreetedFirstLoad = false
+    private var voiceTask: Task<Void, Never>?
+    private var ampTimer: Task<Void, Never>?
     private static let resolvedDraftIdsKey = "compost.resolvedDraftIds"
     private var resolvedDraftIds: Set<String>
 
-    init(notion: NotionClient) {
+    init(notion: NotionClient, voice: VoiceClient = AppleVoiceClient()) {
         self.notion = notion
         self.poller = CompostPoller(client: notion)
         self.wake = WakeTrigger()
         self.hotkey = HotkeyManager()
+        self.voiceHotkey = VoiceCaptureHotkey()
+        self.voice = voice
         self.resolvedDraftIds = Set(UserDefaults.standard.stringArray(forKey: Self.resolvedDraftIdsKey) ?? [])
     }
 
@@ -84,6 +110,105 @@ final class NotchManager: ObservableObject {
         hotkey.onPressed = { [weak self] in
             Task { await self?.toggle() }
         }
+        voiceHotkey.onPress = { [weak self] in
+            Task { await self?.beginVoiceCapture() }
+        }
+        voiceHotkey.onRelease = { [weak self] in
+            Task { await self?.endVoiceCapture() }
+        }
+    }
+
+    // MARK: - Voice surface
+
+    /// Push-to-talk start. Switches the expanded card into voice mode and
+    /// kicks the recorder. Called from the global ⌥⌘V monitor.
+    func beginVoiceCapture() async {
+        guard voiceStage != .listening, voiceStage != .transcribing else { return }
+        surface = .voice
+        voiceStage = .listening
+        voiceTranscript = ""
+        if state != .expanded {
+            transition(to: .expanding)
+            await notch?.expand()
+            transition(to: .expanded)
+        }
+
+        // Amplitude polling — drives the waveform envelope while the user holds.
+        ampTimer?.cancel()
+        ampTimer = Task { [weak self] in
+            while let self, await !Task.isCancelled, await self.voiceStage == .listening {
+                let amp = (self.voice as? AppleVoiceClient)?.currentAmplitude() ?? 0
+                await MainActor.run { self.voiceAmplitude = amp }
+                try? await Task.sleep(nanoseconds: 50_000_000) // ~20 fps
+            }
+        }
+
+        voiceTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                // Long max — we'll cut it short when the user releases the key.
+                let text = try await self.voice.transcribe(maxDuration: 8.0)
+                await MainActor.run {
+                    self.voiceStage = .finished(text)
+                    self.voiceTranscript = text
+                    self.lastSuccess = .voiceCaptured(text)
+                }
+                NSLog("[CompostAction] voiceCapture success: %@", text)
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                await MainActor.run { self.voiceStage = .failed(msg) }
+                NSLog("[CompostAction] voiceCapture failed: %@", msg)
+            }
+            await MainActor.run { self.voiceAmplitude = 0 }
+        }
+    }
+
+    /// Push-to-talk end. The transcribe task is already running with its
+    /// own timeout; releasing the key just transitions the visible stage.
+    func endVoiceCapture() async {
+        guard voiceStage == .listening else { return }
+        voiceStage = .transcribing
+        ampTimer?.cancel()
+        ampTimer = nil
+    }
+
+    /// Exit voice mode and restore the summary surface. Called by the
+    /// "Tap to end" button and by quick-action routing.
+    func exitVoice() {
+        voiceTask?.cancel(); voiceTask = nil
+        ampTimer?.cancel(); ampTimer = nil
+        voice.stopSpeaking()
+        voiceStage = .idle
+        voiceTranscript = ""
+        voiceAmplitude = 0
+        surface = .summary
+    }
+
+    // MARK: - Memory tagging
+
+    /// Append a tag to a notionMemory row directly via the Notion API.
+    /// No worker tool involvement — this is a pure metadata write the user
+    /// already has permission for via the integration token.
+    func tagMemory(_ item: MemoryItem, tag: String) async {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let action = InflightAction.tagMemory(item.id)
+        memoryErrors.removeValue(forKey: item.id)
+        inflight.insert(action)
+        defer { inflight.remove(action) }
+
+        do {
+            _ = try await notion.appendMemoryTag(pageId: item.id, tag: trimmed)
+            lastSuccess = .memoryTagged(item.title, trimmed)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if case .memoryTagged = self?.lastSuccess { self?.lastSuccess = nil }
+            }
+            await poller.refreshNow()
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            memoryErrors[item.id] = msg
+        }
     }
 
     // MARK: - State transitions
@@ -98,6 +223,8 @@ final class NotchManager: ObservableObject {
             digestReady: s.digestReady,
             digestUrl: s.digestUrl,
             currentCue: s.currentCue,
+            memoryCount: s.memory.count,
+            memory: s.memory,
             lastError: s.lastError
         )
 
@@ -109,7 +236,9 @@ final class NotchManager: ObservableObject {
         proposalErrors = proposalErrors.filter { liveProposalIds.contains($0.key) }
         let liveDraftIds = Set(visible.drafts.map { $0.id })
         draftErrors = draftErrors.filter { liveDraftIds.contains($0.key) }
-        let total = visible.proposalCount + visible.draftCount + (visible.digestReady ? 1 : 0)
+        let liveMemoryIds = Set(visible.memory.map { $0.id })
+        memoryErrors = memoryErrors.filter { liveMemoryIds.contains($0.key) }
+        let total = visible.proposalCount + visible.draftCount + visible.memoryCount + (visible.digestReady ? 1 : 0)
         if total == 0 {
             if case .peek = state {
                 await notch?.hide()
@@ -284,6 +413,8 @@ final class NotchManager: ObservableObject {
             case .applyApproved:   return "Apply"
             case .applyProposal:   return "Apply"
             case .reviewDraft:     return "Review"
+            case .voiceCapture:    return "Voice capture"
+            case .tagMemory:       return "Tag memory"
             }
         }()
         let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
@@ -342,7 +473,10 @@ struct ContentRouter: View {
             .help("Open Compost")
             .accessibilityAddTraits(.isButton)
         case .expanding, .expanded:
-            ExpandedView(manager: manager)
+            switch manager.surface {
+            case .voice:   VoiceView(manager: manager)
+            case .summary: ExpandedView(manager: manager)
+            }
         }
     }
 }

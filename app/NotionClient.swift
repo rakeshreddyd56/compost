@@ -12,9 +12,13 @@ struct NotionDbIds {
     let frozenDrafts: String
     let weeklyDigests: String
     let cueCards: String
+    let notionMemory: String
     let parentPage: String
 
-    static let empty = NotionDbIds(compostPile: "", frozenDrafts: "", weeklyDigests: "", cueCards: "", parentPage: "")
+    static let empty = NotionDbIds(
+        compostPile: "", frozenDrafts: "", weeklyDigests: "",
+        cueCards: "", notionMemory: "", parentPage: ""
+    )
 }
 
 enum NotionError: Error, LocalizedError {
@@ -122,6 +126,60 @@ final class NotionClient {
         guard !ids.weeklyDigests.isEmpty else { return nil }
         let pages = try await queryDatabase(ids.weeklyDigests, filter: nil)
         return pages.compactMap(WeeklyDigest.init).max(by: { $0.weekStart < $1.weekStart })
+    }
+
+    /// Recent memory items, newest `Captured At` first. Empty when DB ID is
+    /// not configured — the Memory section then renders empty rather than
+    /// triggering a failing request on every poll.
+    func fetchRecentMemory(limit: Int = 24) async throws -> [MemoryItem] {
+        guard !ids.notionMemory.isEmpty else { return [] }
+        let pages = try await queryDatabase(ids.notionMemory, filter: nil)
+        let items = pages.compactMap(MemoryItem.init)
+        let sorted = items.sorted { lhs, rhs in
+            (lhs.capturedAt ?? .distantPast) > (rhs.capturedAt ?? .distantPast)
+        }
+        return Array(sorted.prefix(limit))
+    }
+
+    /// Append a tag to a notionMemory row's `Tags` multi_select. Idempotent —
+    /// the existing tags are read first and the new one merged in, so calling
+    /// this twice with the same tag is a no-op. Used by the Photos surface
+    /// `+ Tag` action; no worker tool needed.
+    func appendMemoryTag(pageId: String, tag: String) async throws -> [String] {
+        let trimmedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pageId.isEmpty, !trimmedTag.isEmpty else { return [] }
+
+        // Read current row to merge tag list (Notion's PATCH replaces, not appends).
+        var getReq = authed(base.appendingPathComponent("pages/\(pageId)"))
+        getReq.httpMethod = "GET"
+        let (getData, getResp) = try await sendWithRetry(getReq)
+        guard let getHttp = getResp as? HTTPURLResponse, getHttp.statusCode == 200 else {
+            let body = String(data: getData, encoding: .utf8) ?? ""
+            throw NotionError.httpStatus((getResp as? HTTPURLResponse)?.statusCode ?? -1, body)
+        }
+        let page = try JSONDecoder().decode(NotionPage.self, from: getData)
+        var existing = page.properties["Tags"]?.multiSelectNames ?? []
+        if !existing.contains(where: { $0.caseInsensitiveCompare(trimmedTag) == .orderedSame }) {
+            existing.append(trimmedTag)
+        }
+
+        var patchReq = authed(base.appendingPathComponent("pages/\(pageId)"))
+        patchReq.httpMethod = "PATCH"
+        let body: [String: Any] = [
+            "properties": [
+                "Tags": [
+                    "multi_select": existing.map { ["name": $0] }
+                ]
+            ]
+        ]
+        patchReq.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (patchData, patchResp) = try await sendWithRetry(patchReq)
+        guard let http = patchResp as? HTTPURLResponse, http.statusCode == 200 else {
+            let s = String(data: patchData, encoding: .utf8) ?? ""
+            throw NotionError.httpStatus((patchResp as? HTTPURLResponse)?.statusCode ?? -1, s)
+        }
+        return existing
     }
 
     func currentCueCard() async throws -> CueCard? {
@@ -337,6 +395,7 @@ struct NotionProperty: Decodable {
     let title: [NotionText]?
     let rich_text: [NotionText]?
     let `select`: NotionSelect?
+    let multi_select: [NotionSelect]?
     let checkbox: Bool?
     let date: NotionDate?
     let number: Double?
@@ -362,5 +421,9 @@ extension NotionProperty {
         if let c = checkbox { return c ? "true" : "false" }
         if let n = number { return String(n) }
         return ""
+    }
+
+    var multiSelectNames: [String] {
+        multi_select?.map { $0.name } ?? []
     }
 }
