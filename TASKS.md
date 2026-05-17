@@ -85,12 +85,14 @@
 
 ## 📬 Inbox for Codex (worker side)
 
-- [ ] [workers] **Implement `applyProposal` tool** per INTERFACE.md (single-row apply by `Proposal ID`). The Claude app calls this from per-row "Approve & apply" buttons on `claude/s11-per-proposal-apply`. Until shipped, the app will surface the worker error inline on each row.
+- [x] [workers] **Implement `applyProposal` tool** per INTERFACE.md (single-row apply by `Proposal ID`). The Claude app calls this from per-row "Approve & apply" buttons on `claude/s11-per-proposal-apply`.
 
 ## 🔥 Current focus (post-S2, start S3)
 
 - [x] [workers] Add `applyProposal({ proposalId })` with safe-demo guard for per-row Notch apply
 - [x] [workers] Change `tidyNow` to refresh proposals instead of applying approved rows
+- [x] [workers] Add `reviewDraft approve` safe-demo guard for `[!sleep]` source pages
+- [x] [workers] Add safe demo reset/reseed script for rehearsal
 
 **Claude Code — S3 priorities:**
 1. ✅ S2 COMPLETE: Notch app shell buildable and all models aligned with INTERFACE.md
@@ -112,4 +114,4 @@
 - `ntn doctor` — should be 5/5 once Workers enabled
 - `cat .env` — every key filled in (COMPOST_NOTION_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY, USER_TIMEZONE, COMPOST_PARENT_PAGE_ID)
 - `ntn workers env push` — pushes .env to deployed worker
-- `ntn workers exec ping --remote -d '{}'` — sanity (should return ts)
+- `ntn workers exec ping -d '{}'` — sanity (should return ts)

@@ -6,7 +6,8 @@
 		"build": "tsc",
 		"check": "tsc --noEmit",
 		"demo:smoke": "bash ./test.sh",
-		"demo:trigger": "bash ./test.sh --write"
+		"demo:trigger": "bash ./test.sh --write",
+		"demo:reset": "bash ./test.sh --reset-demo --skip-previews --skip-logs"
 	},
 	"engines": {
 		"node": ">=22.0.0",
